@@ -58,6 +58,9 @@ type audioCppServerModel struct {
 	Family string `json:"family"`
 	Path   string `json:"path"`
 	Task   string `json:"task,omitempty"`
+	// SessionOptions is audio.cpp's session_options map (component file
+	// picks for a multi-quant directory model, see config.AudioCppConfig).
+	SessionOptions map[string]string `json:"session_options,omitempty"`
 }
 
 // audioCppSpawnArgs writes this model's audio.cpp config and appends --config to
@@ -112,6 +115,8 @@ func writeAudioCppConfig(modelID string, ac config.AudioCppConfig) (string, erro
 			Family: ac.Family,
 			Path:   ac.Path,
 			Task:   ac.Task,
+
+			SessionOptions: ac.SessionOptions,
 		}},
 	}
 	data, err := json.MarshalIndent(doc, "", "  ")

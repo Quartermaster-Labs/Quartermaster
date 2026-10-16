@@ -12,7 +12,7 @@ everything that is not the LLM path. Backend *selection* is in
 | `image.go` | Diffusion / image generation (sd-server) |
 | `decision.go` | llama.cpp decision models (`/v1/systemone`) |
 | `embedding.go` | Text embedders |
-| `audiocpp.go` | audio.cpp — one engine serving **two classes** (tts + asr), 72 families |
+| `audiocpp.go` | audio.cpp — one engine serving tts, asr, music and separation, 72 families |
 | `audio.go` | TTS — **two engines** (qwentts.cpp, TTS.cpp) |
 | `asr.go` | Speech-to-text (parakeet.cpp) |
 
@@ -314,8 +314,8 @@ the server reads it out of the same file for itself).
 `audioCppFamilies` maps every upstream family to the classes it serves. Three ways a model is
 **deliberately dropped with a comment instead of an entry**, since no other engine here could
 serve it either: no family id in the header (a third-party `-orig` conversion that dropped the
-spec - we warn rather than guess), a known family we do not serve yet (music, separation, voice
-conversion, codec, align, diar, midi, s2s), and an unknown family (upstream added one; the table
+spec - we warn rather than guess), a known family we do not serve yet (voice conversion, codec,
+align, diar, midi, s2s, and music families other than the two below), and an unknown family (upstream added one; the table
 needs a row).
 
 ### It must never become a second scheduler
@@ -396,5 +396,24 @@ zero row and the emitter fell to its "no audio.cpp backend registered" path: a b
 offering the mismatch in the first place (`modelConfigResp.IsAudioCpp`, filled from the presence
 of the generated `audiocpp:` block), but the resolver does not rely on the client for that.
 
-Music (`ace_step`, `songbloom`, ...) is a follow-up: it needs a class of its own, a
-`/v1/tasks/run` base64-WAV translation handler and a UI tab.
+### Music and separation (`gen` / `sep`)
+
+`ace_step` and `minimax_music3` are task `gen` (capability `music`, plus `musicEdit` for
+ace_step, the only one with repaint/complete/cover), `htdemucs` is task `sep` (capability
+`separation`). They have no speech in/out, so they land on the Music tab, not Speech, and are
+answered by the typed routes in `internal/server/musicapi.go`. Other music families
+(`songbloom`, ...) stay `# SKIPPED`: the typed routes whitelist options per family, and a family
+with no row there would accept nothing but a prompt.
+
+A music generator is charged `audioCppMusicOverheadGB` (1 GB, an estimate: a song's latents and
+activations are larger than a sentence's) instead of the speech overhead.
+
+**MiniMax Music 3 is a DIRECTORY, not a file.** Only the shared `vocoder.gguf` /
+`condition_encoder.gguf` carry the family id; the per-quant `language_model_<q>.gguf`,
+`transformer_<q>.gguf` and `rvq_depth_decoder_<q>.gguf` carry none. `audioCppDirPackageFamily`
+recognises the package from its shared file, and `emitAudioCppDirModel` emits ONE model per
+complete quant (`<dir base minus -gguf>-<q>`), with `path` set to the directory and the quant's
+components named through `audiocpp.sessionOptions` (`language_model_gguf`,
+`rvq_depth_decoder_gguf`, `flow_transformer_gguf`). A quant missing its language model or
+transformer is not emitted; with none complete the package is a `# SKIPPED ... no complete quant`
+comment, which is also what a half-finished download looks like.

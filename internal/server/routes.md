@@ -18,6 +18,12 @@ Everything is registered in `routes` (`server.go`). Model-dispatched routes (`mo
   it through form parsing's query fallback rather than a body field. TRELLIS.2 image-to-3D
   (`trellis2-server`); the generated GLB comes back from the upstream's `/output/<name>`.
 - **`GET`** — `/v1/audio/voices`, `/sdapi/v1/loras`.
+- **`POST /v1/music/generations`, `/v1/music/edits`, `/v1/audio/separations`** (`musicapi.go`):
+  typed audio.cpp music routes, JSON or multipart. Rewritten onto audio.cpp's
+  `POST /v1/tasks/run` and dispatched through the same `localPeerHandler`, so the one-big-model
+  swap applies. Synchronous: the upstream proxy has no response-header timeout. Generations
+  return `audio/wav` (or `b64_json`) with the seed in `X-Seed`; separations return
+  `{"stems":[{name, sample_rate, channels, audio}]}`.
 - **`POST /sdcpp/v1/vid_gen`** (`videojobs.go`) — starts an async video render. Model-dispatched
   like any other generate route, but the response is a job id, not a video; the handler buffers
   the upstream reply so it can take a scheduler **lease** before the client can poll. The two

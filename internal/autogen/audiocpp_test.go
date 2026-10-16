@@ -1,6 +1,9 @@
 package autogen
 
 import (
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -45,8 +48,8 @@ func TestAudioCppTask(t *testing.T) {
 		"nemotron_asr":  "asr",
 		"echo_tts":      "tts", // clone-only is still speech synthesis
 		"firered_audio": "tts", // dual-task: one config entry, tts wins
-		"ace_step":      "",    // music: known, not served here
-		"htdemucs":      "",    // separation
+		"ace_step":      "gen", // music
+		"htdemucs":      "sep", // separation
 		"seed_vc":       "",    // voice conversion
 		"not_a_family":  "",
 	}
@@ -59,7 +62,7 @@ func TestAudioCppTask(t *testing.T) {
 		t.Error("audioCppKnownFamily(not_a_family) = true")
 	}
 	if !audioCppKnownFamily("ace_step") {
-		t.Error("audioCppKnownFamily(ace_step) = false, want true (known, just unserved)")
+		t.Error("audioCppKnownFamily(ace_step) = false, want true")
 	}
 }
 
@@ -127,7 +130,7 @@ func TestEmitAudioCppModel_ASR(t *testing.T) {
 	}
 }
 
-// A family we know about but do not serve (music, separation, voice conversion)
+// A family we know about but do not serve (voice conversion, codecs, alignment)
 // must not reach the config at all: no other engine here could serve it either,
 // and an entry in the Speech tab would fail every request.
 func TestEmitAudioCppModel_UnservedFamiliesAreSkipped(t *testing.T) {
@@ -136,7 +139,7 @@ func TestEmitAudioCppModel_UnservedFamiliesAreSkipped(t *testing.T) {
 		family string
 		want   string
 	}{
-		{"music", "ace_step", "music / separation / voice-conversion"},
+		{"voice conversion", "seed_vc", "voice-conversion"},
 		{"unknown", "brand_new_tts", "unknown audio.cpp family"},
 		{"no family id", "", "no audiocpp.model_spec.family"},
 	}
@@ -275,5 +278,186 @@ func TestAudioCppBackend_IgnoresCrossEnginePin(t *testing.T) {
 	}
 	if got := audioCppFlavour(s, be.ID); got != "cuda" {
 		t.Errorf("flavour = %q, want cuda from the pinned build row", got)
+	}
+}
+
+func TestEmitAudioCppModel_MusicGen(t *testing.T) {
+	s := audioCppSettings("vulkan")
+	row := audioCppRow("/models/music/acestep-v15-turbo-bf16.gguf")
+	meta := Metadata{Architecture: "audiocpp", AudioFamily: "ace_step"}
+
+	var b strings.Builder
+	var emitted []string
+	emitAudioCppModel(&b, s, row, &Override{}, "acestep-v15-turbo-bf16", meta, &emitted)
+	out := b.String()
+
+	for _, want := range []string{`task: "gen"`, `family: "ace_step"`, "music: true", "musicEdit: true"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("emitted YAML missing %q:\n%s", want, out)
+		}
+	}
+	// A music generator has no speech surface: text->audio would advertise
+	// audio_speech, and voice cloning does not apply.
+	for _, bad := range []string{"in: [text]", "out: [audio]", "voiceClone"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("music entry advertises %q:\n%s", bad, out)
+		}
+	}
+	if len(emitted) != 1 {
+		t.Fatalf("emitted = %v, want 1 entry", emitted)
+	}
+}
+
+func TestEmitAudioCppModel_Separation(t *testing.T) {
+	s := audioCppSettings("vulkan")
+	row := audioCppRow("/models/music/htdemucs-f16.gguf")
+	meta := Metadata{Architecture: "audiocpp", AudioFamily: "htdemucs"}
+
+	var b strings.Builder
+	var emitted []string
+	emitAudioCppModel(&b, s, row, &Override{}, "htdemucs-f16", meta, &emitted)
+	out := b.String()
+
+	if !strings.Contains(out, `task: "sep"`) || !strings.Contains(out, "separation: true") {
+		t.Errorf("separation entry missing task/capability:\n%s", out)
+	}
+	if strings.Contains(out, "music: true") {
+		t.Errorf("separation entry advertises music:\n%s", out)
+	}
+	if strings.Contains(out, "in: [") {
+		t.Errorf("separation entry declares speech in/out:\n%s", out)
+	}
+	if len(emitted) != 1 {
+		t.Fatalf("emitted = %v, want 1 entry", emitted)
+	}
+}
+
+// writeMiniMaxPackage lays out a MiniMax Music 3 package directory: the shared
+// vocoder carries the family id in its header, the other components carry none.
+// Each file in files is written as a non-empty placeholder, except the shared
+// vocoder and condition encoder, which are real GGUF headers.
+func writeMiniMaxPackage(t *testing.T, dir string, files ...string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	family := [][2]any{
+		{"general.architecture", "audiocpp"},
+		{"audiocpp.model_spec.family", "minimax_music3"},
+	}
+	for _, f := range files {
+		p := filepath.Join(dir, f)
+		if f == "vocoder.gguf" || f == "condition_encoder.gguf" {
+			writeGgufKVs(t, p, family)
+			continue
+		}
+		if err := os.WriteFile(p, []byte("placeholder-weights"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// miniMaxRow is a GgufRow for a file inside a package directory, with FileName
+// set to the base name (audioCppRow splits on "/" only, which a Windows
+// filepath.Join path does not contain).
+func miniMaxRow(path string) GgufRow {
+	row := audioCppRow(filepath.ToSlash(path))
+	row.FileName = filepath.Base(path)
+	return row
+}
+
+func TestEmitAudioCppModel_MiniMaxDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "MiniMax-Music-3-GGUF")
+	writeMiniMaxPackage(t, dir,
+		"vocoder.gguf", "condition_encoder.gguf",
+		"language_model_q8_0.gguf", "transformer_q8_0.gguf", "rvq_depth_decoder_q8_0.gguf",
+		"language_model_q4_0.gguf", // no transformer_q4_0: q4_0 must not be emitted
+	)
+	s := audioCppSettings("vulkan")
+	row := miniMaxRow(filepath.Join(dir, "vocoder.gguf"))
+	meta := Metadata{Architecture: "audiocpp", AudioFamily: "minimax_music3"}
+
+	var b strings.Builder
+	var emitted []string
+	emitAudioCppModel(&b, s, row, &Override{}, "vocoder", meta, &emitted)
+	out := b.String()
+
+	for _, want := range []string{
+		`"minimax-music-3-q8_0":`,
+		`language_model_gguf: "language_model_q8_0.gguf"`,
+		`flow_transformer_gguf: "transformer_q8_0.gguf"`,
+		`rvq_depth_decoder_gguf: "rvq_depth_decoder_q8_0.gguf"`,
+		"sessionOptions:",
+		"music: true",
+		`path: "` + filepath.ToSlash(dir) + `"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("emitted YAML missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "minimax-music-3-q4_0") {
+		t.Errorf("emitted q4_0 with no transformer_q4_0 on disk:\n%s", out)
+	}
+	// MiniMax has no edit routes.
+	if strings.Contains(out, "musicEdit") {
+		t.Errorf("MiniMax entry advertises musicEdit:\n%s", out)
+	}
+	if want := []string{"minimax-music-3-q8_0"}; !reflect.DeepEqual(emitted, want) {
+		t.Fatalf("emitted = %v, want %v", emitted, want)
+	}
+}
+
+func TestEmitAudioCppModel_MiniMaxComponents(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "MiniMax-Music-3-GGUF")
+	writeMiniMaxPackage(t, dir,
+		"vocoder.gguf", "condition_encoder.gguf",
+		"language_model_q8_0.gguf", "transformer_q8_0.gguf", "rvq_depth_decoder_q8_0.gguf",
+	)
+	s := audioCppSettings("vulkan")
+
+	// A family-less per-quant component is explained by its package, not skipped.
+	var b strings.Builder
+	var emitted []string
+	emitAudioCppModel(&b, s, miniMaxRow(filepath.Join(dir, "transformer_q8_0.gguf")), &Override{},
+		"transformer_q8_0", Metadata{Architecture: "audiocpp"}, &emitted)
+	out := b.String()
+	if !strings.Contains(out, "component of the minimax_music3 package") {
+		t.Errorf("no package note for a family-less component:\n%s", out)
+	}
+	if strings.Contains(out, "SKIPPED") {
+		t.Errorf("family-less component of a known package was SKIPPED:\n%s", out)
+	}
+	if len(emitted) != 0 {
+		t.Errorf("emitted = %v for a component, want none", emitted)
+	}
+
+	// The shared condition encoder carries the family but is not the anchor.
+	b.Reset()
+	emitAudioCppModel(&b, s, miniMaxRow(filepath.Join(dir, "condition_encoder.gguf")), &Override{},
+		"condition_encoder", Metadata{Architecture: "audiocpp", AudioFamily: "minimax_music3"}, &emitted)
+	out = b.String()
+	if !strings.Contains(out, "shared component") {
+		t.Errorf("no shared-component note for condition_encoder.gguf:\n%s", out)
+	}
+	if len(emitted) != 0 {
+		t.Errorf("emitted = %v for the shared encoder, want none", emitted)
+	}
+}
+
+func TestEmitAudioCppModel_MiniMaxIncomplete(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "MiniMax-Music-3-GGUF")
+	writeMiniMaxPackage(t, dir, "vocoder.gguf", "language_model_q8_0.gguf")
+	s := audioCppSettings("vulkan")
+
+	var b strings.Builder
+	var emitted []string
+	emitAudioCppModel(&b, s, miniMaxRow(filepath.Join(dir, "vocoder.gguf")), &Override{},
+		"vocoder", Metadata{Architecture: "audiocpp", AudioFamily: "minimax_music3"}, &emitted)
+	out := b.String()
+	if !strings.Contains(out, "SKIPPED minimax_music3: no complete quant") {
+		t.Errorf("no skip note for a package with no complete quant:\n%s", out)
+	}
+	if len(emitted) != 0 {
+		t.Errorf("emitted = %v for an incomplete package, want none", emitted)
 	}
 }

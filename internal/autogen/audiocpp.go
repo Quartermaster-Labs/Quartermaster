@@ -1,8 +1,9 @@
 package autogen
 
 // audio.cpp (0xShug0/audio.cpp) is one ggml runtime for ~72 speech and audio
-// model families: text-to-speech, voice cloning, speech recognition, and (not
-// wired here yet) music, separation and voice conversion. It speaks the same
+// model families: text-to-speech, voice cloning, speech recognition, music
+// generation, stem separation and (not wired here yet) voice conversion. It
+// speaks the same
 // OpenAI surface the existing engines do - /v1/audio/speech,
 // /v1/audio/transcriptions, /v1/audio/voices, /health - so it lands in the
 // existing tts and asr classes rather than needing new ones, and it is the first
@@ -31,7 +32,10 @@ package autogen
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 )
 
@@ -58,6 +62,8 @@ func isAudioCppKind(kind string) bool {
 const (
 	audioClsTTS = 1 << iota
 	audioClsASR
+	audioClsMusic // task "gen", answered on /v1/music/*
+	audioClsSep   // task "sep", answered on /v1/audio/separations
 )
 
 // audioCppFamilies maps audio.cpp's family id - the value its converter stamps
@@ -65,10 +71,12 @@ const (
 // under. Derived from upstream's model_specs/*.json, one entry per spec file,
 // with that spec's own task list and support status in the trailing comment.
 //
-// A family at 0 is KNOWN and deliberately not emitted: music, stem separation,
-// voice conversion, codecs, alignment, diarization and speech-to-speech have no
-// class, route or UI here yet. Emitting them as speech models would put a music
-// generator in the Speech tab, where every request would fail.
+// A family at 0 is KNOWN and deliberately not emitted: voice conversion,
+// codecs, alignment, diarization and speech-to-speech have no class, route or
+// UI here yet. Music and separation ARE served, but only for the families whose
+// request options the typed routes in internal/server/musicapi.go know
+// (ace_step, minimax_music3, htdemucs): each family reads a different option
+// set, and one the route has no whitelist for would 400 every request.
 //
 // A family MISSING from this table is one upstream added after the table was
 // written; emitAudioCppModel says so in the YAML rather than guessing a class
@@ -78,7 +86,7 @@ const (
 // speech synthesizer whose voice must come from a reference clip rather than a
 // preset, which is a request-shape difference, not a different class.
 var audioCppFamilies = map[string]int{
-	"ace_step":             0,                         // music,edit (supported)
+	"ace_step":             audioClsMusic,             // music,edit (supported)
 	"audio8_asr":           audioClsASR,               // asr (community)
 	"audio8_tts":           audioClsTTS,               // tts,clone (community)
 	"audiosr":              0,                         // s2s (experimental)
@@ -103,7 +111,7 @@ var audioCppFamilies = map[string]int{
 	"heartmula":            0,                         // music (supported)
 	"higgs_audio_stt":      audioClsASR,               // asr (supported)
 	"higgs_audio_tts":      audioClsTTS,               // tts,clone (supported)
-	"htdemucs":             0,                         // sep (supported)
+	"htdemucs":             audioClsSep,               // sep (supported)
 	"hviske_asr":           audioClsASR,               // asr (supported)
 	"index_tts2":           audioClsTTS,               // tts,clone (supported)
 	"inflect_v2":           audioClsTTS,               // tts (community)
@@ -114,7 +122,7 @@ var audioCppFamilies = map[string]int{
 	"mel_band_roformer":    0,                         // sep (supported)
 	"midashenglm_gen":      0,                         // music (experimental)
 	"minimax_h3":           0,                         // tts,music,sfx (experimental)
-	"minimax_music3":       0,                         // music (experimental)
+	"minimax_music3":       audioClsMusic,             // music (experimental)
 	"miocodec":             0,                         // codec,vc,s2s (supported)
 	"miotts":               audioClsTTS,               // tts,clone (supported)
 	"mira_tts":             audioClsTTS,               // tts,clone (experimental)
@@ -167,6 +175,31 @@ var audioCppClones = map[string]bool{
 	"vietneu_tts": true, "voxcpm1": true, "voxcpm2": true,
 }
 
+// audioCppMusicEdits lists the music families that implement the edit routes
+// (repaint / complete / cover), which gates /v1/music/edits.
+var audioCppMusicEdits = map[string]bool{"ace_step": true}
+
+// audioCppDirFamilies are the families whose model is a DIRECTORY of component
+// ggufs rather than one file, keyed to the component that anchors the emit.
+// MiniMax Music 3 ships a language model, an RVQ depth decoder and a flow
+// transformer per quant beside one shared vocoder and condition encoder, and
+// audio.cpp loads the folder, told which quant of each component to use through
+// session_options. Only the shared files carry the family id in their header;
+// the per-quant components carry none.
+var audioCppDirFamilies = map[string]string{"minimax_music3": "vocoder.gguf"}
+
+// audioCppDirQuants are the component quants a MiniMax Music 3 package is
+// published in, best first. A model is emitted per quant whose language model
+// and flow transformer are both on disk; the RVQ depth decoder falls back to
+// q8_0, which the q4_0 package ships in place of a q4_0 one.
+var audioCppDirQuants = []string{"bf16", "q8_0", "q4_0"}
+
+// audioCppMusicOverheadGB is audioCppOverheadGB for a music generator: a song
+// is minutes of audio latent plus a vocoder decode over all of it, which is not
+// the working set of a sentence of speech. A first estimate, to be replaced by
+// a measured one.
+const audioCppMusicOverheadGB = 1.0
+
 // audioCppOverheadGB pads a family's weights into a VRAM admission estimate: the
 // session buffers, the vocoder or audio tokenizer that loads alongside the model
 // and the runtime's own context. A flat pad, for the same reason qwentts gets
@@ -188,14 +221,19 @@ func IsAudioCppModel(meta Metadata) bool {
 // dual-task family: the config entry names a single task, so advertising
 // transcription on a process configured for speech would route requests at a
 // route it was not set up to answer. TTS wins the tie, which is what the
-// dual-task families are primarily published as. Returns "" for a family with no
-// class here (music et al) and for one the table does not know.
+// dual-task families are primarily published as. Music is "gen" and separation
+// "sep", audio.cpp's own task names. Returns "" for a family with no class here
+// (voice conversion et al) and for one the table does not know.
 func audioCppTask(family string) string {
 	switch cls := audioCppFamilies[strings.ToLower(strings.TrimSpace(family))]; {
 	case cls&audioClsTTS != 0:
 		return "tts"
 	case cls&audioClsASR != 0:
 		return "asr"
+	case cls&audioClsMusic != 0:
+		return "gen"
+	case cls&audioClsSep != 0:
+		return "sep"
 	}
 	return ""
 }
@@ -227,7 +265,11 @@ func AudioCppFamilySupport(family string) (task string, known bool) {
 	return audioCppTask(family), audioCppKnownFamily(family)
 }
 
-// audioCppClass is the backend class the family is served under here.
+// audioCppClass is the backend class the family is served under here. Music and
+// separation resolve as "tts": the class only picks WHICH audio.cpp build row
+// launches the model (resolution is filtered to audio.cpp rows anyway), and a
+// class of their own would add a default-star slot to the backends page that
+// could only ever hold the same build.
 func audioCppClass(family string) string {
 	if audioCppTask(family) == "asr" {
 		return "asr"
@@ -379,6 +421,12 @@ func audioCppCmdLines(s Settings, row GgufRow, ov *Override, class string) []str
 func emitAudioCppModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name string, meta Metadata, emitted *[]string) {
 	family := strings.ToLower(strings.TrimSpace(meta.AudioFamily))
 	if family == "" {
+		// A per-quant component of a directory package carries no family id of
+		// its own; it is emitted with the package's anchor, not skipped.
+		if fam := audioCppDirPackageFamily(filepath.Dir(row.FullPath)); fam != "" {
+			fmt.Fprintf(b, "\n  # %s: component of the %s package in %s, emitted with its %s\n", name, fam, filepath.ToSlash(filepath.Dir(row.FullPath)), audioCppDirFamilies[fam])
+			return
+		}
 		// Nothing can be done from here: family is a required field of the config
 		// entry, and it is the one thing the server cannot work out for itself
 		// from the weights. A conversion that dropped the spec (a third-party
@@ -387,18 +435,38 @@ func emitAudioCppModel(b *strings.Builder, s Settings, row GgufRow, ov *Override
 		return
 	}
 	task := audioCppTask(family)
+	if anchor, ok := audioCppDirFamilies[family]; ok {
+		if !strings.EqualFold(row.FileName, anchor) {
+			fmt.Fprintf(b, "\n  # %s: shared component of the %s package in %s, emitted with its %s\n", name, family, filepath.ToSlash(filepath.Dir(row.FullPath)), anchor)
+			return
+		}
+		emitAudioCppDirModel(b, s, row, ov, family, task, emitted)
+		return
+	}
 	if task == "" {
 		if audioCppKnownFamily(family) {
-			fmt.Fprintf(b, "\n  # SKIPPED %s: audio.cpp family %q is a music / separation / voice-conversion model, which has no class or route here yet\n", name, family)
+			fmt.Fprintf(b, "\n  # SKIPPED %s: audio.cpp family %q is a voice-conversion / codec / alignment model, or a music / separation family the typed routes have no options for, which has no class or route here yet\n", name, family)
 		} else {
 			fmt.Fprintf(b, "\n  # SKIPPED %s: unknown audio.cpp family %q - add it to audioCppFamilies in internal/autogen/audiocpp.go\n", name, family)
 		}
 		return
 	}
+	overhead := audioCppOverheadGB
+	if task == "gen" {
+		overhead = audioCppMusicOverheadGB
+	}
+	writeAudioCppEntry(b, s, row, ov, name, family, task, strings.ReplaceAll(row.FullPath, "\\", "/"), nil, row.SizeGB, row.SizeGB+overhead)
+	*emitted = append(*emitted, name)
+}
+
+// writeAudioCppEntry writes one audiocpp_server model entry. path is what the
+// audio.cpp config names (a gguf, or a package directory), sessionOptions its
+// session_options, sizeGB the weights on disk and estGB the admission estimate.
+func writeAudioCppEntry(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, family, task, path string, sessionOptions map[string]string, sizeGB, estGB float64) {
 	class := audioCppClass(family)
 	be := audioCppBackend(s, ov, class)
 
-	fmt.Fprintf(b, "\n  # family=%s task=%s size=%gGB (audio.cpp audiocpp_server)\n", family, task, row.SizeGB)
+	fmt.Fprintf(b, "\n  # family=%s task=%s size=%gGB (audio.cpp audiocpp_server)\n", family, task, sizeGB)
 	if be.Exe == "" {
 		fmt.Fprintf(b, "  # WARNING: no audio.cpp backend registered (Settings -> Backends, \"audio.cpp\"); %s will not start until one is installed\n", name)
 	} else if audioCppFlavour(s, be.ID) == "" {
@@ -415,23 +483,44 @@ func emitAudioCppModel(b *strings.Builder, s Settings, row GgufRow, ov *Override
 	}
 	b.WriteString("    audiocpp:\n")
 	fmt.Fprintf(b, "      family: %q\n", family)
-	fmt.Fprintf(b, "      path: %q\n", strings.ReplaceAll(row.FullPath, "\\", "/"))
+	fmt.Fprintf(b, "      path: %q\n", path)
 	fmt.Fprintf(b, "      task: %q\n", task)
+	if len(sessionOptions) > 0 {
+		b.WriteString("      sessionOptions:\n")
+		keys := make([]string, 0, len(sessionOptions))
+		for k := range sessionOptions {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(b, "        %s: %q\n", k, sessionOptions[k])
+		}
+	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
 	// audio.cpp serializes inference behind a per-model mutex and 503s a request
 	// that waits out its busy timeout. Queuing here instead keeps that from ever
 	// being reached, and keeps the wait visible to our own scheduler.
 	b.WriteString("    concurrencyLimit: 1\n")
-	writeEstVram(b, row.SizeGB+audioCppOverheadGB)
+	writeEstVram(b, estGB)
 	b.WriteString("    checkEndpoint: /health\n")
 	if ov != nil && ov.Unlisted {
 		b.WriteString("    unlisted: true\n")
 	}
 	b.WriteString("    capabilities:\n")
-	if task == "asr" {
+	switch task {
+	case "asr":
 		b.WriteString("      in: [audio]\n")
 		b.WriteString("      out: [text]\n")
-	} else {
+	case "gen":
+		// No in/out pair: text->audio is what advertises audio_speech, and a
+		// music generator has no /v1/audio/speech route.
+		b.WriteString("      music: true\n")
+		if audioCppMusicEdits[family] {
+			b.WriteString("      musicEdit: true\n")
+		}
+	case "sep":
+		b.WriteString("      separation: true\n")
+	default:
 		b.WriteString("      in: [text]\n")
 		b.WriteString("      out: [audio]\n")
 		if audioCppClones[family] {
@@ -439,5 +528,74 @@ func emitAudioCppModel(b *strings.Builder, s Settings, row GgufRow, ov *Override
 		}
 	}
 	writeDisplayName(b, s, name)
-	*emitted = append(*emitted, name)
+}
+
+// audioCppDirPackageFamily reports the directory-model family a folder holds,
+// read from its anchor component's header, or "" when it holds none. This is
+// what tells a family-less MiniMax component (whose header says nothing about
+// what it belongs to) apart from a broken export that genuinely lost its spec.
+func audioCppDirPackageFamily(dir string) string {
+	for fam, anchor := range audioCppDirFamilies {
+		meta, err := ReadGgufMetadata(filepath.Join(dir, anchor))
+		if err == nil && strings.EqualFold(strings.TrimSpace(meta.AudioFamily), fam) {
+			return fam
+		}
+	}
+	return ""
+}
+
+// emitAudioCppDirModel emits one model per complete quant of a directory
+// package, anchored on the package's shared vocoder row. The config names the
+// directory, and session_options pin every component file: audio.cpp's own
+// defaults name the q4_0 language model and transformer with the bf16 depth
+// decoder, a mix no published package contains, so leaving any of them unset
+// fails at load on a box that downloaded one quant.
+func emitAudioCppDirModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, family, task string, emitted *[]string) {
+	dir := filepath.Dir(row.FullPath)
+	base := strings.ToLower(filepath.Base(dir))
+	base = strings.TrimSuffix(strings.TrimSuffix(base, "-gguf"), "_gguf")
+	size := func(file string) (float64, bool) {
+		fi, err := os.Stat(filepath.Join(dir, file))
+		if err != nil || fi.IsDir() || fi.Size() <= 0 {
+			return 0, false
+		}
+		return float64(fi.Size()) / (1 << 30), true
+	}
+	shared := row.SizeGB
+	if gb, ok := size("condition_encoder.gguf"); ok {
+		shared += gb
+	}
+	emittedAny := false
+	for _, q := range audioCppDirQuants {
+		lm, transformer := "language_model_"+q+".gguf", "transformer_"+q+".gguf"
+		lmGB, ok1 := size(lm)
+		trGB, ok2 := size(transformer)
+		if !ok1 || !ok2 {
+			continue
+		}
+		rvq := "rvq_depth_decoder_" + q + ".gguf"
+		rvqGB, ok := size(rvq)
+		if !ok {
+			rvq = "rvq_depth_decoder_q8_0.gguf"
+			if rvqGB, ok = size(rvq); !ok {
+				continue
+			}
+		}
+		name := base + "-" + q
+		for n := 2; slices.Contains(*emitted, name); n++ {
+			name = fmt.Sprintf("%s-%s-%d", base, q, n)
+		}
+		weights := shared + lmGB + trGB + rvqGB
+		opts := map[string]string{
+			"language_model_gguf":    lm,
+			"rvq_depth_decoder_gguf": rvq,
+			"flow_transformer_gguf":  transformer,
+		}
+		writeAudioCppEntry(b, s, row, ov, name, family, task, strings.ReplaceAll(dir, "\\", "/"), opts, round(weights, 2), weights+audioCppMusicOverheadGB)
+		*emitted = append(*emitted, name)
+		emittedAny = true
+	}
+	if !emittedAny {
+		fmt.Fprintf(b, "\n  # SKIPPED %s: no complete quant in %s (needs language_model_<q>.gguf and transformer_<q>.gguf; a download may still be running)\n", family, filepath.ToSlash(dir))
+	}
 }

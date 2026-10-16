@@ -397,7 +397,7 @@ type APIKeyEntry struct {
 // to /api/settings/root/pick, so a category missing here is a root the user can
 // set and see in the toolbar that is then never scanned. The pick handler
 // rejects anything not listed here so that failure is loud rather than silent.
-var CategoryOrder = []string{"llm", "image", "video", "3d", "segment", "tts", "transcribe", "embed", "decision"}
+var CategoryOrder = []string{"llm", "image", "video", "3d", "segment", "music", "tts", "transcribe", "embed", "decision"}
 
 // IsCategory reports whether name is a known UI category (i.e. a valid
 // CategoryRoots key).

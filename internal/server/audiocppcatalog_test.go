@@ -29,17 +29,17 @@ type catalogResp struct {
 	} `json:"families"`
 }
 
-// spec bodies, trimmed to the fields the reader uses. moss_tts_nano and ace_step
+// spec bodies, trimmed to the fields the reader uses. moss_tts_nano and seed_vc
 // are both real families in internal/autogen's table: one served as tts, one
-// known and deliberately not served (music).
+// known and deliberately not served (voice conversion).
 const (
 	specTTS = `{"family":"moss_tts_nano","display_name":"MossTTS Nano","category":"tts",
 	  "package_defaults":{"download":{"kind":"huggingface_snapshot","repo":"audio-cpp/audio.cpp-gguf"}},
 	  "packages":[{"id":"q8","display_name":"Q8_0","default":true,"format":"gguf","files":["Moss/moss-q8_0.gguf"]},
 	              {"id":"bf16","display_name":"BF16","format":"gguf","files":["Moss/moss-bf16.gguf"]}]}`
-	specMusic = `{"family":"ace_step","display_name":"ACE-Step","category":"audio_generation",
+	specMusic = `{"family":"seed_vc","display_name":"Seed-VC","category":"vc",
 	  "package_defaults":{"download":{"kind":"huggingface_snapshot","repo":"audio-cpp/audio.cpp-gguf"}},
-	  "packages":[{"id":"turbo","display_name":"Turbo","format":"gguf","files":["Ace/turbo.gguf"]}]}`
+	  "packages":[{"id":"base","display_name":"Base","format":"gguf","files":["Svc/seed-vc.gguf"]}]}`
 	specUnknown = `{"family":"not_a_real_family_yet","display_name":"Newer Than Us","category":"tts",
 	  "package_defaults":{"download":{"kind":"huggingface_snapshot","repo":"audio-cpp/audio.cpp-gguf"}},
 	  "packages":[{"id":"q8","display_name":"Q8_0","format":"gguf","files":["New/new-q8_0.gguf"]}]}`
@@ -58,7 +58,7 @@ func TestHandleAPIHubAudioCpp_CatalogFromInstall(t *testing.T) {
 	}
 	for name, body := range map[string]string{
 		"moss_tts_nano.json": specTTS,
-		"ace_step.json":      specMusic,
+		"seed_vc.json":       specMusic,
 		"newer.json":         specUnknown,
 	} {
 		if err := os.WriteFile(filepath.Join(specs, name), []byte(body), 0o644); err != nil {
@@ -125,12 +125,12 @@ func TestHandleAPIHubAudioCpp_CatalogFromInstall(t *testing.T) {
 
 	// A family audio.cpp serves and we do not is listed with a reason, not hidden
 	// and not offered as if it would work.
-	music := got.Families[byFamily["ace_step"]]
+	music := got.Families[byFamily["seed_vc"]]
 	if music.Supported || music.Task != "" {
-		t.Errorf("ace_step = %+v, want unsupported", music)
+		t.Errorf("seed_vc = %+v, want unsupported", music)
 	}
 	if music.Reason == "" {
-		t.Error("ace_step has no reason line")
+		t.Error("seed_vc has no reason line")
 	}
 
 	// And a family newer than our table says THAT, which is a different fix.
