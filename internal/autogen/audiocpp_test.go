@@ -392,6 +392,8 @@ func TestEmitAudioCppModel_MiniMaxDirectory(t *testing.T) {
 		`minimax_music3.language_model_gguf: "language_model_q8_0.gguf"`,
 		`minimax_music3.flow_transformer_gguf: "transformer_q8_0.gguf"`,
 		`minimax_music3.rvq_depth_decoder_gguf: "rvq_depth_decoder_q8_0.gguf"`,
+		// Vulkan renders the q8_0 components as hiss unless they load as f16.
+		`minimax_music3.weight_type: "f16"`,
 		"sessionOptions:",
 		"music: true",
 		`path: "` + filepath.ToSlash(dir) + `"`,
@@ -409,6 +411,38 @@ func TestEmitAudioCppModel_MiniMaxDirectory(t *testing.T) {
 	}
 	if want := []string{"minimax-music-3-q8_0"}; !reflect.DeepEqual(emitted, want) {
 		t.Fatalf("emitted = %v, want %v", emitted, want)
+	}
+}
+
+// The f16 conversion is a Vulkan workaround: other backends, and the package's
+// own bf16 quant (stored as f16 on Vulkan already), load native.
+func TestEmitAudioCppModel_MiniMaxWeightTypeOnlyOnVulkanQuants(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "MiniMax-Music-3-GGUF")
+	writeMiniMaxPackage(t, dir,
+		"vocoder.gguf", "condition_encoder.gguf",
+		"language_model_bf16.gguf", "transformer_bf16.gguf", "rvq_depth_decoder_bf16.gguf",
+		"language_model_q8_0.gguf", "transformer_q8_0.gguf", "rvq_depth_decoder_q8_0.gguf",
+	)
+	meta := Metadata{Architecture: "audiocpp", AudioFamily: "minimax_music3"}
+	row := miniMaxRow(filepath.Join(dir, "vocoder.gguf"))
+
+	var b strings.Builder
+	var emitted []string
+	emitAudioCppModel(&b, audioCppSettings("cuda"), row, &Override{}, "vocoder", meta, &emitted)
+	if out := b.String(); strings.Contains(out, "weight_type") {
+		t.Errorf("CUDA entry carries weight_type:\n%s", out)
+	}
+
+	b.Reset()
+	emitted = nil
+	emitAudioCppModel(&b, audioCppSettings("vulkan"), row, &Override{}, "vocoder", meta, &emitted)
+	out := b.String()
+	if n := strings.Count(out, "weight_type"); n != 1 {
+		t.Errorf("weight_type appears %d times on Vulkan, want once (q8_0 only):\n%s", n, out)
+	}
+	bf16 := out[strings.Index(out, `"minimax-music-3-bf16":`):strings.Index(out, `"minimax-music-3-q8_0":`)]
+	if strings.Contains(bf16, "weight_type") {
+		t.Errorf("bf16 entry carries weight_type:\n%s", bf16)
 	}
 }
 

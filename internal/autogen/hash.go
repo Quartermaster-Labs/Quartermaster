@@ -333,7 +333,9 @@ const hashCacheSuffix = ".modelhash"
 // v106: the 24 audio.cpp families upstream added since the table was written
 // are classified (TTS/ASR emitted, the rest skipped by name), and YuE2 is
 // emitted as a folder model with its VAE companion.
-const genVersion = "v106"
+// v107: on a Vulkan audio.cpp build MiniMax Music 3's q8_0/q4_0 quants load
+// with weight_type f16 (native rendered a hiss) and are priced at that size.
+const genVersion = "v107"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

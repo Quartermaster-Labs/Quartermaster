@@ -425,6 +425,15 @@ prefix**, though `model_specs` lists them bare: the server ignores a bare key an
 the spec default (`language_model_q4_0.gguf`), failing the load with "file does not exist". A quant missing its language model or
 transformer is not emitted; with none complete the package is a `# SKIPPED ... no complete quant`
 comment, which is also what a half-finished download looks like.
+**On a Vulkan build the q8_0/q4_0 quants also get `minimax_music3.weight_type: f16`**
+(`miniMaxF16OnVulkan`): loaded native they render a hiss instead of music. bf16 is not the
+cause (audio.cpp already stores bf16 as f16 on Vulkan under `native`); dequantizing the q8_0
+tensors is what fixes it, so the bf16 quant is left alone, as is every other backend. Upstream's
+docs say not to combine `weight_type` with component selection; on Vulkan that advice is what
+produces the noise. The f16 load nearly doubles a q8_0 component (12.6 GB on disk, ~17 GB for
+the language model and depth decoder alone), so the entry is priced at the largest `mem_saver`
+stage (AR, then condition + flow, then vocoder: one resident at a time) from the header's
+`Metadata.ParamCount`, not at the sum of the files.
 
 **YuE2 is a main gguf plus a VAE companion in one folder** (`audioCppCompanions`). Upstream
 publishes the 3B model per quant (`yue2-3b-<q>.gguf`) and the VAE per precision

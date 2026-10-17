@@ -231,6 +231,33 @@ var audioCppDirFamilies = map[string]string{"minimax_music3": "vocoder.gguf"}
 // q8_0, which the q4_0 package ships in place of a q4_0 one.
 var audioCppDirQuants = []string{"bf16", "q8_0", "q4_0"}
 
+// miniMaxF16OnVulkan reports whether a MiniMax Music 3 quant must be loaded
+// with weight_type f16. On the Vulkan build the q8_0 components render a hiss
+// instead of music unless the weights are converted to f16 on load (seen in
+// use on an RX 7900 XTX). It is not the bf16 tensors those files also carry:
+// with weight_type native, audio.cpp already stores bf16 as f16 on Vulkan
+// (backend_weight_store.h). What f16 adds is DEQUANTIZING the q8_0 tensors,
+// so the package's own bf16 quant needs nothing and gets nothing. Upstream
+// says not to combine weight_type with component selection; on this backend
+// that advice is what produces the noise.
+func miniMaxF16OnVulkan(s Settings, ov *Override, q string) bool {
+	if q == "bf16" {
+		return false
+	}
+	be := audioCppBackend(s, ov, audioCppClass("minimax_music3"))
+	return be.Exe != "" && audioCppFlavour(s, be.ID) == "vulkan"
+}
+
+// ggufF16GB is a gguf's weights once converted to f16 on load, or the file
+// size when the header cannot be read.
+func ggufF16GB(path string, fileGB float64) float64 {
+	meta, err := ReadGgufMetadataCached(path)
+	if err != nil || meta.ParamCount <= 0 {
+		return fileGB
+	}
+	return float64(meta.ParamCount) * 2 / (1 << 30)
+}
+
 // audioCppCompanion describes a family whose model is one main gguf plus a
 // companion gguf beside it in the same folder. audio.cpp loads the FOLDER and is
 // told both file names through session options, which are relative to it.
@@ -680,12 +707,24 @@ func emitAudioCppDirModel(b *strings.Builder, s Settings, row GgufRow, ov *Overr
 			name = fmt.Sprintf("%s-%s-%d", base, q, n)
 		}
 		weights := shared + lmGB + trGB + rvqGB
+		est := weights + audioCppMusicOverheadGB
 		opts := map[string]string{
 			family + ".language_model_gguf":    lm,
 			family + ".rvq_depth_decoder_gguf": rvq,
 			family + ".flow_transformer_gguf":  transformer,
 		}
-		writeAudioCppEntry(b, s, row, ov, name, family, task, strings.ReplaceAll(dir, "\\", "/"), opts, round(weights, 2), weights+audioCppMusicOverheadGB)
+		if miniMaxF16OnVulkan(s, ov, q) {
+			opts[family+".weight_type"] = "f16"
+			// f16 roughly doubles a q8_0 component, and summing every file the
+			// way the native price does would ask for more than a 24 GB card
+			// has. mem_saver (on by default) holds one stage at a time: the AR
+			// stage (language model + depth decoder), then condition + flow,
+			// then the vocoder. Price the largest of them.
+			ar := ggufF16GB(filepath.Join(dir, lm), lmGB) + ggufF16GB(filepath.Join(dir, rvq), rvqGB)
+			flow := ggufF16GB(filepath.Join(dir, transformer), trGB) + shared
+			est = max(ar, flow) + audioCppMusicOverheadGB
+		}
+		writeAudioCppEntry(b, s, row, ov, name, family, task, strings.ReplaceAll(dir, "\\", "/"), opts, round(weights, 2), est)
 		*emitted = append(*emitted, name)
 		emittedAny = true
 	}
