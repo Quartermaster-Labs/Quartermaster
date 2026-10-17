@@ -50,6 +50,7 @@ import (
 	"time"
 
 	"github.com/quartermaster-labs/quartermaster/internal/apppaths"
+	"github.com/quartermaster-labs/quartermaster/internal/autogen"
 	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
@@ -85,6 +86,8 @@ var musicFamilyInputRate = map[string]int{"htdemucs": 44100}
 // musicFamilyOptions is the per-family whitelist for the free-form `options`
 // object. Typed request fields (seed, lyrics, duration, steps, guidance, the
 // edit window) are not listed: they have their own fields and win over this.
+// A score is not listed either (YuE2's abc): it is the typed `score` field,
+// mapped per family through autogen.AudioCppMusicScore, so one door checks it.
 // Path-valued options (noise_file, source_audio, and YuE2's abc_file,
 // semantic_prefix_file, nar_noise_file) are deliberately absent, and so are
 // YuE2's stop_after and export_semantic: a run stopped before the audio stage,
@@ -101,12 +104,39 @@ var musicFamilyOptions = map[string]map[string]bool{
 	),
 	"minimax_music3": setOf("ar_guidance_scale", "top_k"),
 	"yue2": setOf(
-		"cot", "abc", "semantic_prefix",
+		"cot", "semantic_prefix",
 		"abc_temperature", "abc_top_p", "abc_top_k", "abc_repetition_penalty",
 		"abc_penalty_window", "abc_min_tokens", "abc_max_tokens",
 		"semantic_temperature", "semantic_top_p", "semantic_top_k", "semantic_repetition_penalty",
 		"semantic_penalty_window", "semantic_min_tokens", "semantic_max_tokens",
 	),
+}
+
+// maxMusicScoreBytes caps an inline score. A whole song in ABC is a few KB;
+// the cap only stops a multi-MB body being tokenized as a prompt.
+const maxMusicScoreBytes = 64 << 10
+
+// applyMusicScore puts a typed score into the family's own option. A blank
+// score is no score. Refused: a family that takes none, an edit (the score
+// conditions generation from nothing), and a planning mode that skips the
+// score stage, which would otherwise drop it without a word.
+func applyMusicScore(route musicRoute, family string, score *string, opts map[string]string) error {
+	if score == nil || strings.TrimSpace(*score) == "" {
+		return nil
+	}
+	sc, ok := autogen.AudioCppMusicScore(family)
+	switch {
+	case !ok:
+		return musicError(family + " takes no score")
+	case route != musicGenerate:
+		return musicError("a score applies to generation only")
+	case len(*score) > maxMusicScoreBytes:
+		return musicError(fmt.Sprintf("score is larger than %d KiB", maxMusicScoreBytes>>10))
+	case sc.ModeOption != "" && opts[sc.ModeOption] == sc.ModeOff:
+		return musicError(fmt.Sprintf("a score is ignored with %s=%s; use another %s value", sc.ModeOption, sc.ModeOff, sc.ModeOption))
+	}
+	opts[sc.Option] = *score
+	return nil
 }
 
 func setOf(keys ...string) map[string]bool {
@@ -120,9 +150,12 @@ func setOf(keys ...string) map[string]bool {
 // musicRequest is the union of the three routes' fields. JSON and multipart
 // both decode into it.
 type musicRequest struct {
-	Model          string         `json:"model"`
-	Prompt         string         `json:"prompt"`
-	Lyrics         *string        `json:"lyrics"`
+	Model  string  `json:"model"`
+	Prompt string  `json:"prompt"`
+	Lyrics *string `json:"lyrics"`
+	// Score is a written score to condition generation on, in the notation the
+	// model's capabilities.musicScore names. Generation only.
+	Score          *string        `json:"score"`
 	Duration       *float64       `json:"duration"`
 	Seed           *int64         `json:"seed"`
 	Steps          *int           `json:"steps"`
@@ -363,6 +396,10 @@ func musicRequestFromForm(f *multipart.Form, req *musicRequest) error {
 		v := get("lyrics")
 		req.Lyrics = &v
 	}
+	if _, ok := f.Value["score"]; ok {
+		v := get("score")
+		req.Score = &v
+	}
 	floats := map[string]**float64{"duration": &req.Duration, "guidance": &req.Guidance, "start": &req.Start, "end": &req.End, "repaint_strength": &req.RepaintStrength}
 	for k, dst := range floats {
 		if v := strings.TrimSpace(get(k)); v != "" {
@@ -484,6 +521,9 @@ func buildMusicUpstream(route musicRoute, family string, req musicRequest) (uint
 			if req.Duration != nil {
 				return 0, nil, nil, musicError("YuE2 has no duration: the song is as long as its lyrics")
 			}
+		}
+		if err := applyMusicScore(route, family, req.Score, opts); err != nil {
+			return 0, nil, nil, err
 		}
 		if req.Duration != nil {
 			if *req.Duration <= 0 {

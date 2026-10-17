@@ -298,6 +298,9 @@ func TestEmitAudioCppModel_MusicGen(t *testing.T) {
 			t.Errorf("emitted YAML missing %q:\n%s", want, out)
 		}
 	}
+	if strings.Contains(out, "musicScore") {
+		t.Errorf("ACE-Step entry advertises a score:\n%s", out)
+	}
 	// A music generator has no speech surface: text->audio would advertise
 	// audio_speech, and voice cloning does not apply.
 	for _, bad := range []string{"in: [text]", "out: [audio]", "voiceClone"} {
@@ -576,6 +579,7 @@ func TestEmitAudioCppModel_Yue2Companion(t *testing.T) {
 		`yue2.model_gguf: "yue2-3b-q8_0.gguf"`,
 		`yue2.vae_gguf: "yue2-vae-f16.gguf"`,
 		"music: true",
+		"musicScore: abc",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("emitted YAML missing %q:\n%s", want, out)

@@ -405,6 +405,12 @@ answered by the typed routes in `internal/server/musicapi.go`. Other music famil
 (`songbloom`, ...) stay `# SKIPPED`: the typed routes whitelist options per family, and a family
 with no row there would accept nothing but a prompt.
 
+**A family that can be conditioned on a written score advertises `musicScore: <notation>`**
+(`audioCppMusicScores`, today only `yue2: abc`). The same table tells the music route which
+option the typed `score` field goes into and which planning value (`cot: off`) skips it, so the
+playground shows a score box for any model with the capability rather than for a name it
+recognizes, and adding a family is one row.
+
 A music generator is charged `audioCppMusicOverheadGB` (1 GB, an estimate: a song's latents and
 activations are larger than a sentence's) instead of the speech overhead.
 

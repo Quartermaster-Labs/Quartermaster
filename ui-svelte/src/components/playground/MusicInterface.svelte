@@ -78,6 +78,7 @@
   const timeSigStore = userPref<string>("playground-music-timesig", "");
   const negativeStore = userPref<string>("playground-music-negative", "");
   const cotStore = userPref<string>("playground-music-cot", "");
+  const scoreStore = userPref<string>("playground-music-score", "");
 
   const COT_OPTIONS = [
     { value: "", label: "model (full)" },
@@ -139,6 +140,30 @@
   // thing, and the server's 400 is the backstop if a rename ever fools it.
   let isMiniMax = $derived(/minimax/i.test(model));
   let isYue = $derived(/yue/i.test(model));
+  // The score notation the picked model advertises (capabilities.music_score),
+  // or "" when it takes none. Shown for any model that says so, not by name.
+  let scoreFormat = $derived(listed.find((m) => m.id === model)?.capabilities?.music_score ?? "");
+  // Mirrors the server's cap (maxMusicScoreBytes).
+  const MAX_SCORE_BYTES = 64 << 10;
+  let scoreError = $state("");
+  let scoreBlocked = $derived(!!scoreFormat && isYue && $cotStore === "off" && !!$scoreStore.trim());
+
+  async function onScoreFile(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    scoreError = "";
+    if (file.size > MAX_SCORE_BYTES) {
+      scoreError = `${file.name} is larger than ${MAX_SCORE_BYTES >> 10} KiB`;
+      return;
+    }
+    try {
+      scoreStore.set(await file.text());
+    } catch (err) {
+      scoreError = err instanceof Error ? err.message : String(err);
+    }
+  }
   let isAce = $derived(mode !== "stems" && !isMiniMax && !isYue);
 
   // --- source clip (edit + stems) -------------------------------------------
@@ -421,6 +446,8 @@
     if (task === "separate") return { ...t, source: src, sourceLabel: srcLabel };
     const lyrics = get(lyricsStore);
     if (lyrics.trim()) t.lyrics = lyrics;
+    const score = get(scoreStore);
+    if (scoreFormat && task === "generate" && score.trim()) t.score = score;
     const dur = num(get(durationStore));
     if (!isYue && dur !== undefined && dur > 0 && (task === "generate" || task === "complete")) t.duration = dur;
     const seed = parsedSeed();
@@ -460,6 +487,7 @@
       model: t.model,
       prompt: t.prompt,
       lyrics: t.lyrics ?? "",
+      score: t.score,
       duration: t.duration,
       seed: t.seed,
       steps: t.steps,
@@ -490,6 +518,7 @@
     if (mode === "stems") return !!source;
     if (seedInvalid) return false;
     if (isMiniMax && !$lyricsStore.trim()) return false;
+    if (mode === "create" && scoreBlocked) return false;
     if (mode === "create") return !!prompt.trim();
     if (!source || !prompt.trim()) return false;
     return editTask !== "repaint" || windowValid;
@@ -500,6 +529,7 @@
     if (mode === "stems") return source ? "" : "Pick a source clip on the left";
     if (mode === "edit" && !source) return "Pick a source clip on the left";
     if (isMiniMax && !$lyricsStore.trim()) return "MiniMax Music 3 needs lyrics";
+    if (mode === "create" && scoreBlocked) return "A score needs planning on (melody or full)";
     if (seedInvalid) return "The seed must be a whole number";
     if (mode === "edit" && editTask === "repaint" && !windowValid) return "The repaint window is empty";
     return "";
@@ -550,6 +580,7 @@
     if (t.task === "separate") return;
     prompt = t.prompt;
     lyricsStore.set(t.lyrics ?? "");
+    scoreStore.set(t.score ?? "");
     if (t.duration !== undefined) durationStore.set(String(t.duration));
     seedText = t.seed !== undefined ? String(t.seed) : "";
     stepsStore.set(t.steps !== undefined ? String(t.steps) : "");
@@ -760,6 +791,27 @@
                 class="{inputCls} resize-y font-mono leading-relaxed min-h-[6rem]"
               ></textarea>
             </div>
+
+            {#if scoreFormat && mode === "create"}
+              <div class="flex flex-col gap-1.5">
+                <div class="flex items-center gap-2">
+                  <span class={labelCls}>Score ({scoreFormat.toUpperCase()})</span>
+                  <span class="ml-auto text-micro text-txtsecondary">optional, guides the melody</span>
+                  <label class="btn btn--sm inline-flex items-center gap-1.5 cursor-pointer">
+                    <Upload class="w-3.5 h-3.5" />
+                    Load .{scoreFormat}
+                    <input type="file" accept=".{scoreFormat},text/plain" class="hidden" onchange={onScoreFile} />
+                  </label>
+                </div>
+                <textarea
+                  bind:value={$scoreStore}
+                  rows="5"
+                  placeholder={scoreFormat !== "abc" ? "" : "X:1\nM:4/4\nL:1/8\nK:C\nCDEF GABc|"}
+                  class="{inputCls} resize-y font-mono leading-relaxed min-h-[4rem]"
+                ></textarea>
+                {#if scoreError}<span class="text-error text-xs">{scoreError}</span>{/if}
+              </div>
+            {/if}
 
             <div class="flex items-end gap-2">
               {#if !isYue && (mode === "create" || editTask === "complete")}

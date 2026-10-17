@@ -209,6 +209,26 @@ func TestBuildMusicUpstream_Yue2(t *testing.T) {
 	}
 }
 
+func TestBuildMusicUpstream_Yue2Score(t *testing.T) {
+	score := "X:1\nK:C\nCDEF|"
+	_, body, _, err := buildMusicUpstream(musicGenerate, "yue2", musicRequest{Model: "m", Prompt: "x", Score: &score})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, opts := upstreamDoc(t, body); opts["abc"] != score {
+		t.Errorf("abc = %q, want the score", opts["abc"])
+	}
+	// A blank score is no score, even with the planner off.
+	blank := "  "
+	_, body, _, err = buildMusicUpstream(musicGenerate, "yue2", musicRequest{Model: "m", Prompt: "x", Score: &blank, Options: map[string]any{"cot": "off"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, opts := upstreamDoc(t, body); opts["abc"] != "" {
+		t.Errorf("blank score sent abc = %q", opts["abc"])
+	}
+}
+
 func TestBuildMusicUpstream_RandomSeedIsExplicit(t *testing.T) {
 	seed, body, _, err := buildMusicUpstream(musicGenerate, "ace_step", musicRequest{Model: "m", Prompt: "x", Seed: ptr(int64(-1))})
 	if err != nil {
@@ -247,6 +267,10 @@ func TestBuildMusicUpstream_Rejects(t *testing.T) {
 		{"yue2 abc_file", musicGenerate, "yue2", musicRequest{Prompt: "x", Options: map[string]any{"abc_file": "C:/Windows/win.ini"}}},
 		{"yue2 semantic_prefix_file", musicGenerate, "yue2", musicRequest{Prompt: "x", Options: map[string]any{"semantic_prefix_file": "/etc/passwd"}}},
 		{"yue2 nar_noise_file", musicGenerate, "yue2", musicRequest{Prompt: "x", Options: map[string]any{"nar_noise_file": "/etc/passwd"}}},
+		{"yue2 abc option", musicGenerate, "yue2", musicRequest{Prompt: "x", Options: map[string]any{"abc": "X:1"}}},
+		{"score on ace_step", musicGenerate, "ace_step", musicRequest{Prompt: "x", Score: ptr("X:1")}},
+		{"yue2 score with cot off", musicGenerate, "yue2", musicRequest{Prompt: "x", Score: ptr("X:1"), Options: map[string]any{"cot": "off"}}},
+		{"yue2 oversized score", musicGenerate, "yue2", musicRequest{Prompt: "x", Score: ptr(strings.Repeat("a", maxMusicScoreBytes+1))}},
 		{"yue2 stop_after", musicGenerate, "yue2", musicRequest{Prompt: "x", Options: map[string]any{"stop_after": "abc"}}},
 	}
 	for _, c := range cases {

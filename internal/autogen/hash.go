@@ -335,7 +335,7 @@ const hashCacheSuffix = ".modelhash"
 // emitted as a folder model with its VAE companion.
 // v107: on a Vulkan audio.cpp build MiniMax Music 3's q8_0/q4_0 quants load
 // with weight_type f16 (native rendered a hiss) and are priced at that size.
-const genVersion = "v107"
+const genVersion = "v108"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

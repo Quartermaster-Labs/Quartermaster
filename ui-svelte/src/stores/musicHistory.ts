@@ -22,6 +22,7 @@ export type Turn = {
   model: string;
   prompt: string;
   lyrics?: string;
+  score?: string;
   duration?: number;
   seed?: number;
   steps?: number;

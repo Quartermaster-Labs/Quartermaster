@@ -25,6 +25,8 @@ export interface ModelCapabilities {
   music_generation?: boolean;
   // Accepts repaint / complete / cover edits on POST /v1/music/edits (ACE-Step).
   music_edit?: boolean;
+  // Notation of the written score the model can be conditioned on ("abc"); absent = none.
+  music_score?: string;
   // Stem separator (POST /v1/audio/separations: HTDemucs).
   audio_separation?: boolean;
   // llama.cpp decision model served by POST /v1/systemone (TypeSafe System One).

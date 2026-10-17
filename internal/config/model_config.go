@@ -52,6 +52,10 @@ type ModelCapConfig struct {
 	Music      bool `yaml:"music"`
 	MusicEdit  bool `yaml:"musicEdit"`
 	Separation bool `yaml:"separation"`
+	// MusicScore names the score notation a music generator can be conditioned
+	// on ("abc" for YuE2); empty = none. Sent as the generation route's typed
+	// `score` field.
+	MusicScore string `yaml:"musicScore"`
 	// ReasoningEffort lists the reasoning-effort levels this model's chat
 	// template accepts (Qwen 3.8: xhigh/medium/low), lowest-cost value LAST as
 	// the template declares them. Non-empty is the signal that an incoming
@@ -65,7 +69,7 @@ type ModelCapConfig struct {
 
 // Empty returns true when all fields are at their zero values.
 func (c ModelCapConfig) Empty() bool {
-	return len(c.In) == 0 && len(c.Out) == 0 && !c.Tools && !c.Reranker && !c.Embedding && !c.Segmentation && !c.Decision && c.DecisionType == "" && !c.VoiceClone && !c.Music && !c.MusicEdit && !c.Separation && len(c.ReasoningEffort) == 0 && c.Context == 0
+	return len(c.In) == 0 && len(c.Out) == 0 && !c.Tools && !c.Reranker && !c.Embedding && !c.Segmentation && !c.Decision && c.DecisionType == "" && !c.VoiceClone && !c.Music && !c.MusicEdit && !c.Separation && c.MusicScore == "" && len(c.ReasoningEffort) == 0 && c.Context == 0
 }
 
 // Validate checks that all modality values are recognized and context is

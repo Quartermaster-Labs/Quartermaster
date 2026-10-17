@@ -15,6 +15,8 @@ export type MusicParams = {
   model: string;
   prompt: string;
   lyrics?: string;
+  // Written score in the model's capabilities.music_score notation. Generation only.
+  score?: string;
   duration?: number;
   seed?: number;
   steps?: number;
@@ -41,6 +43,7 @@ function body(p: MusicParams): Record<string, unknown> {
   // Lyrics are sent even when empty: ACE-Step reads "" as instrumental, and
   // the server only checks them for MiniMax, which requires them.
   if (p.lyrics !== undefined) b.lyrics = p.lyrics;
+  if (p.score) b.score = p.score;
   if (p.duration !== undefined) b.duration = p.duration;
   if (p.seed !== undefined) b.seed = p.seed;
   if (p.steps !== undefined) b.steps = p.steps;

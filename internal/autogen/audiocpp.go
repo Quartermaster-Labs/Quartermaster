@@ -205,6 +205,35 @@ var audioCppClones = map[string]bool{
 // (repaint / complete / cover), which gates /v1/music/edits.
 var audioCppMusicEdits = map[string]bool{"ace_step": true}
 
+// AudioCppScore describes a music family that can be conditioned on a written
+// score. It is what turns on the playground's score box (the model's
+// capabilities.musicScore names the notation) and what the generation route
+// maps its typed `score` field through, so a new family is one row here.
+type AudioCppScore struct {
+	// Format is the notation the family reads ("abc"), advertised as
+	// capabilities.musicScore.
+	Format string
+	// Option is the request option the score text is sent in. Always an
+	// INLINE option: the path-valued twins (YuE2's abc_file) are a server-side
+	// file read and never reach audio.cpp from a request.
+	Option string
+	// ModeOption/ModeOff name a planning option whose ModeOff value skips the
+	// score stage, so a score sent with it would be ignored without a word.
+	// Blank when the family has no such switch.
+	ModeOption, ModeOff string
+}
+
+// audioCppMusicScores lists the music families that take a score.
+var audioCppMusicScores = map[string]AudioCppScore{
+	"yue2": {Format: "abc", Option: "abc", ModeOption: "cot", ModeOff: "off"},
+}
+
+// AudioCppMusicScore reports whether an audio.cpp family takes a score, and how.
+func AudioCppMusicScore(family string) (AudioCppScore, bool) {
+	sc, ok := audioCppMusicScores[family]
+	return sc, ok
+}
+
 // audioCppFamilySessionOptions are session options a single-file family always
 // gets. ace_step.mem_saver frees the per-request graph buffers instead of
 // keeping the largest ones warm: without it a render that follows a LONGER one
@@ -680,6 +709,9 @@ func writeAudioCppEntry(b *strings.Builder, s Settings, row GgufRow, ov *Overrid
 		b.WriteString("      music: true\n")
 		if audioCppMusicEdits[family] {
 			b.WriteString("      musicEdit: true\n")
+		}
+		if sc, ok := audioCppMusicScores[family]; ok {
+			fmt.Fprintf(b, "      musicScore: %s\n", sc.Format)
 		}
 	case "sep":
 		b.WriteString("      separation: true\n")

@@ -105,7 +105,11 @@ Also here: `turns_design.md` — the turn runner's design notes.
   option; an unknown key is a 400. YuE2 takes its prompt as the `style` option and reads lyrics
   from the task's `text` when the `lyrics` option is absent, so the route always sends `lyrics`
   (empty = no lyrics, which is NOT instrumental: YuE2 has no such mode and may still sing) or it
-  would sing the style tags; it also 400s a `duration`. The seed
+  would sing the style tags; it also 400s a `duration`. A written score is the typed `score`
+  field, INLINE text only (64 KiB cap, generation only), mapped onto the family's own option by
+  `autogen.AudioCppMusicScore`; the option itself (`abc`) is off the whitelist so there is one
+  door, and a score with the family's skip mode (`cot=off`) is a 400 rather than silently dropped.
+  `abc_file` stays excluded: it is a path. The seed
   is always sent explicitly (a random u32 when the caller gave none) and echoed in `X-Seed`, so
   every result is reproducible. Input passes through
   byte for byte unless the family has a hard rate (HTDemucs: 44.1 kHz, `musicFamilyInputRate`),
