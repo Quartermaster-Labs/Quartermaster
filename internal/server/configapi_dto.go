@@ -228,6 +228,9 @@ type overrideDTO struct {
 	// generator probes the backend and picks the first discrete GPU; a negative
 	// value turns the flag off. Ignored by every other backend.
 	AudioDevice *int `json:"audioDevice"`
+	// AudioWeightType is "" (auto), "native" or "f16"; see
+	// autogen.Override.AudioWeightType. Anything else saves as auto.
+	AudioWeightType string `json:"audioWeightType"`
 	// Image (sd-server) knobs; ignored for llama models.
 	VaePath         string `json:"vaePath"`
 	ClipLPath       string `json:"clipLPath"`
@@ -303,8 +306,13 @@ type modelConfigResp struct {
 	// the wrong one is a silent no-op (autogen resolves audio.cpp models among
 	// audio.cpp rows only, and the others through withoutAudioCpp). This flag lets
 	// the picker show only the engines that could actually run THIS file.
-	IsAudioCpp  bool `json:"isAudioCpp"`
-	HasOverride bool `json:"hasOverride"`
+	IsAudioCpp bool `json:"isAudioCpp"`
+	// AudioWeightTypeAuto is set only for a family the editor offers a weight
+	// storage choice for (autogen.AudioCppWeightTypeFamilies): what a blank
+	// pin resolves to here, "native" or "f16". The UI shows the control when
+	// it is non-empty and labels its Auto option with it.
+	AudioWeightTypeAuto string `json:"audioWeightTypeAuto,omitempty"`
+	HasOverride         bool   `json:"hasOverride"`
 	// DisplayName is the UI-chosen advertised name for this base id ("" => none;
 	// the model advertises its real id). Renaming cascades to variant ids.
 	DisplayName string       `json:"displayName"`
@@ -418,8 +426,8 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		SpecDraftNMin: o.SpecDraftNMin, SlotPromptSimilarity: o.SlotPromptSimilarity,
 		RopeScaling: o.RopeScaling, RopeScale: o.RopeScale, RopeFreqBase: o.RopeFreqBase, YarnOrigCtx: o.YarnOrigCtx,
 		SplitMode: o.SplitMode, TensorSplit: o.TensorSplit, MainGpu: o.MainGpu, OverrideTensor: o.OverrideTensor,
-		AudioDevice: o.AudioDevice,
-		VaePath:     o.VaePath, ClipLPath: o.ClipLPath, ClipGPath: o.ClipGPath,
+		AudioDevice: o.AudioDevice, AudioWeightType: o.AudioWeightType,
+		VaePath: o.VaePath, ClipLPath: o.ClipLPath, ClipGPath: o.ClipGPath,
 		T5Path: o.T5Path, TextEncoderPath: o.TextEncoderPath,
 		OffloadToCpu: o.OffloadToCpu, TeOnCpu: o.TeOnCpu, VaeOnCpu: o.VaeOnCpu, VaeTiling: o.VaeTiling, TemporalTiling: o.TemporalTiling, StreamLayers: o.StreamLayers, DiffusionFa: o.DiffusionFa, RefEdit: o.RefEdit,
 		PromptEnhancer:           o.PromptEnhancer,
@@ -509,6 +517,12 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.CtxVariants = body.CtxVariants
 	ov.CtxCheckpoints = body.CtxCheckpoints
 	ov.AudioDevice = body.AudioDevice
+	switch w := strings.ToLower(strings.TrimSpace(body.AudioWeightType)); w {
+	case autogen.AudioWeightNative, autogen.AudioWeightF16:
+		ov.AudioWeightType = w
+	default:
+		ov.AudioWeightType = ""
+	}
 	ov.PreserveThinking = body.PreserveThinking
 	ov.Dry = body.Dry
 	ov.DryMultiplier = body.DryMultiplier

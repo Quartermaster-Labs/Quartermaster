@@ -434,6 +434,12 @@ produces the noise. The f16 load nearly doubles a q8_0 component (12.6 GB on dis
 the language model and depth decoder alone), so the entry is priced at the largest `mem_saver`
 stage (AR, then condition + flow, then vocoder: one resident at a time) from the header's
 `Metadata.ParamCount`, not at the sum of the files.
+That rule is only the AUTO answer. `Override.AudioWeightType` (`native` / `f16`, blank = auto,
+resolved by `miniMaxF16`) pins it either way from the model editor's "Weight storage" select,
+and the price follows the pin: f16 costs a q4_0 package the VRAM of a q8_0 one, which is a trade
+a user on a fixed build should be able to refuse. The select is shown only for families in
+`AudioCppWeightTypeFamilies`, because audio.cpp's `<family>.weight_type` takes a different value
+set per family. `AudioCppWeightTypeAuto` labels the Auto option with the pin-free rule.
 
 **YuE2 is a main gguf plus a VAE companion in one folder** (`audioCppCompanions`). Upstream
 publishes the 3B model per quant (`yue2-3b-<q>.gguf`) and the VAE per precision

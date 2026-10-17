@@ -248,6 +248,55 @@ func miniMaxF16OnVulkan(s Settings, ov *Override, q string) bool {
 	return be.Exe != "" && audioCppFlavour(s, be.ID) == "vulkan"
 }
 
+// AudioCppWeightTypeFamilies are the audio.cpp families whose weight storage
+// the model editor offers as a choice (Override.AudioWeightType).
+var AudioCppWeightTypeFamilies = []string{"minimax_music3"}
+
+// Override.AudioWeightType values. Blank is auto.
+const (
+	AudioWeightNative = "native"
+	AudioWeightF16    = "f16"
+)
+
+// miniMaxF16 resolves whether a MiniMax Music 3 quant loads as f16: an
+// explicit Override.AudioWeightType wins, blank falls back to the Vulkan rule.
+// The user pin exists because the auto rule is a trade, not a fix: f16 costs a
+// q4_0 quant the VRAM of a q8_0 one, and a backend whose native path renders
+// music (or a future audio.cpp that fixes Vulkan) should be able to opt out.
+func miniMaxF16(s Settings, ov *Override, q string) bool {
+	if ov != nil {
+		switch ov.AudioWeightType {
+		case AudioWeightF16:
+			return true
+		case AudioWeightNative:
+			return false
+		}
+	}
+	return miniMaxF16OnVulkan(s, ov, q)
+}
+
+// AudioCppWeightTypeAuto is what a blank Override.AudioWeightType resolves to
+// for an emitted model, given its family and its generated session_options
+// (which name the quant through the language model file). "" for a family
+// that offers no choice. The editor labels its Auto option with this, so it
+// reads the pin-free rule rather than the launched config, which already
+// reflects any pin.
+func AudioCppWeightTypeAuto(s Settings, ov *Override, family string, opts map[string]string) string {
+	if !slices.Contains(AudioCppWeightTypeFamilies, family) {
+		return ""
+	}
+	var auto Override
+	if ov != nil {
+		auto = *ov
+	}
+	auto.AudioWeightType = ""
+	q := strings.TrimSuffix(strings.TrimPrefix(opts[family+".language_model_gguf"], "language_model_"), ".gguf")
+	if miniMaxF16(s, &auto, q) {
+		return AudioWeightF16
+	}
+	return AudioWeightNative
+}
+
 // ggufF16GB is a gguf's weights once converted to f16 on load, or the file
 // size when the header cannot be read.
 func ggufF16GB(path string, fileGB float64) float64 {
@@ -713,7 +762,7 @@ func emitAudioCppDirModel(b *strings.Builder, s Settings, row GgufRow, ov *Overr
 			family + ".rvq_depth_decoder_gguf": rvq,
 			family + ".flow_transformer_gguf":  transformer,
 		}
-		if miniMaxF16OnVulkan(s, ov, q) {
+		if miniMaxF16(s, ov, q) {
 			opts[family+".weight_type"] = "f16"
 			// f16 roughly doubles a q8_0 component, and summing every file the
 			// way the native price does would ask for more than a 24 GB card

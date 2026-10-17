@@ -446,6 +446,42 @@ func TestEmitAudioCppModel_MiniMaxWeightTypeOnlyOnVulkanQuants(t *testing.T) {
 	}
 }
 
+// A pinned weight type beats the Vulkan rule both ways, and the editor's
+// "Auto" label reports the pin-free rule.
+func TestEmitAudioCppModel_MiniMaxWeightTypePin(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "MiniMax-Music-3-GGUF")
+	writeMiniMaxPackage(t, dir,
+		"vocoder.gguf", "condition_encoder.gguf",
+		"language_model_q8_0.gguf", "transformer_q8_0.gguf", "rvq_depth_decoder_q8_0.gguf",
+	)
+	meta := Metadata{Architecture: "audiocpp", AudioFamily: "minimax_music3"}
+	row := miniMaxRow(filepath.Join(dir, "vocoder.gguf"))
+	emit := func(flavour, pin string) string {
+		var b strings.Builder
+		var emitted []string
+		emitAudioCppModel(&b, audioCppSettings(flavour), row, &Override{AudioWeightType: pin}, "vocoder", meta, &emitted)
+		return b.String()
+	}
+	if out := emit("vulkan", AudioWeightNative); strings.Contains(out, "weight_type") {
+		t.Errorf("native pin on Vulkan still emits weight_type:\n%s", out)
+	}
+	if out := emit("cuda", AudioWeightF16); !strings.Contains(out, `minimax_music3.weight_type: "f16"`) {
+		t.Errorf("f16 pin on CUDA emits no weight_type:\n%s", out)
+	}
+
+	opts := map[string]string{"minimax_music3.language_model_gguf": "language_model_q8_0.gguf"}
+	pinned := &Override{AudioWeightType: AudioWeightNative}
+	if got := AudioCppWeightTypeAuto(audioCppSettings("vulkan"), pinned, "minimax_music3", opts); got != AudioWeightF16 {
+		t.Errorf("auto on Vulkan q8_0 = %q, want f16 (the pin must not leak into it)", got)
+	}
+	if got := AudioCppWeightTypeAuto(audioCppSettings("cuda"), nil, "minimax_music3", opts); got != AudioWeightNative {
+		t.Errorf("auto on CUDA = %q, want native", got)
+	}
+	if got := AudioCppWeightTypeAuto(audioCppSettings("vulkan"), nil, "ace_step", opts); got != "" {
+		t.Errorf("auto for a family with no choice = %q, want empty", got)
+	}
+}
+
 func TestEmitAudioCppModel_MiniMaxComponents(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "MiniMax-Music-3-GGUF")
 	writeMiniMaxPackage(t, dir,
