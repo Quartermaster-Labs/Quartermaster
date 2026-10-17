@@ -173,6 +173,42 @@ func TestBuildMusicUpstream_Generate(t *testing.T) {
 	}
 }
 
+// YuE2 reads the prompt as its style option, and an absent lyrics option makes
+// it sing the text input, so an instrumental request must send lyrics "".
+func TestBuildMusicUpstream_Yue2(t *testing.T) {
+	_, body, _, err := buildMusicUpstream(musicGenerate, "yue2", musicRequest{
+		Model: "yue2-3b-q8_0", Prompt: "dream pop, female vocal", Seed: ptr(int64(1 << 40)),
+		Steps: ptr(8), Guidance: ptr(1.5), Options: map[string]any{"cot": "melody", "semantic_top_k": 50.0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, opts := upstreamDoc(t, body)
+	want := map[string]string{
+		"style": "dream pop, female vocal", "seed": "1099511627776",
+		"num_inference_steps": "8", "guidance_scale": "1.5", "cot": "melody", "semantic_top_k": "50",
+	}
+	for k, v := range want {
+		if opts[k] != v {
+			t.Errorf("option %s = %q, want %q", k, opts[k], v)
+		}
+	}
+	if v, ok := opts["lyrics"]; !ok || v != "" {
+		t.Errorf("lyrics = %q (present %v), want an explicit empty string", v, ok)
+	}
+	if _, ok := opts["route"]; ok {
+		t.Error("yue2 got an ACE-Step route option")
+	}
+
+	_, body, _, err = buildMusicUpstream(musicGenerate, "yue2", musicRequest{Model: "m", Prompt: "x", Lyrics: ptr("[verse]\nhello")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, opts = upstreamDoc(t, body); opts["lyrics"] != "[verse]\nhello" {
+		t.Errorf("lyrics = %q", opts["lyrics"])
+	}
+}
+
 func TestBuildMusicUpstream_RandomSeedIsExplicit(t *testing.T) {
 	seed, body, _, err := buildMusicUpstream(musicGenerate, "ace_step", musicRequest{Model: "m", Prompt: "x", Seed: ptr(int64(-1))})
 	if err != nil {
@@ -207,6 +243,11 @@ func TestBuildMusicUpstream_Rejects(t *testing.T) {
 		{"inverted window", musicEdit, "ace_step", musicRequest{Prompt: "x", Task: "repaint", Start: ptr(20.0), End: ptr(10.0), audioBytes: pcm16WAV(make([]int16, 8), 1, 48000)}},
 		{"unknown task", musicEdit, "ace_step", musicRequest{Prompt: "x", Task: "lego"}},
 		{"separation of an mp3", musicSeparate, "htdemucs", musicRequest{audioBytes: []byte("ID3 not a wav")}},
+		{"yue2 duration", musicGenerate, "yue2", musicRequest{Prompt: "x", Duration: ptr(30.0)}},
+		{"yue2 abc_file", musicGenerate, "yue2", musicRequest{Prompt: "x", Options: map[string]any{"abc_file": "C:/Windows/win.ini"}}},
+		{"yue2 semantic_prefix_file", musicGenerate, "yue2", musicRequest{Prompt: "x", Options: map[string]any{"semantic_prefix_file": "/etc/passwd"}}},
+		{"yue2 nar_noise_file", musicGenerate, "yue2", musicRequest{Prompt: "x", Options: map[string]any{"nar_noise_file": "/etc/passwd"}}},
+		{"yue2 stop_after", musicGenerate, "yue2", musicRequest{Prompt: "x", Options: map[string]any{"stop_after": "abc"}}},
 	}
 	for _, c := range cases {
 		_, _, cleanup, err := buildMusicUpstream(c.route, c.family, c.req)

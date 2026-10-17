@@ -131,7 +131,7 @@ accumulate. Sentence-level only: a length model is not good enough for words.
 The Speech studio's layout (settings rail left, takes grid right, composer under it) with three
 modes on a segmented control, one per route family in `lib/musicApi.ts`:
 
-- **Create**: text to music (`/v1/music/generations`, ACE-Step and MiniMax Music 3).
+- **Create**: text to music (`/v1/music/generations`, ACE-Step, MiniMax Music 3 and YuE2).
 - **Edit**: repaint a time window, complete, or cover an existing clip (`/v1/music/edits`,
   ACE-Step only). The repaint window is dragged across a bar or typed in seconds.
 - **Stems**: four-stem split (`/v1/audio/separations`, HTDemucs). No prompt.
@@ -151,7 +151,9 @@ taken from a take's menu ("Edit this take", "Split into stems") is already a ref
 The source is converted to WAV in the browser (`toWav`): a WAV passes through byte for byte,
 anything else is decoded and re-encoded as stereo PCM16 (`lib/wav.ts` is mono, which suits speech
 and flattens a song). MiniMax is recognised by model id (`/minimax/i`) to require lyrics and hide
-ACE-Step's options; the server's family check is the backstop. Edits over ~24 s fail only on AMD
+ACE-Step's options, YuE2 (`/yue/i`) to hide them and the Length field (its song is as long as
+its lyrics, and the route 400s a duration) and to offer its own Planning option (`cot`,
+`playground-music-cot`); the server's family check is the backstop. Edits over ~24 s fail only on AMD
 Vulkan (the VAE encoder's 2 GB buffer), so the client does not block them and shows the server's
 message instead.
 

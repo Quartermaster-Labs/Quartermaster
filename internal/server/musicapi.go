@@ -85,7 +85,10 @@ var musicFamilyInputRate = map[string]int{"htdemucs": 44100}
 // musicFamilyOptions is the per-family whitelist for the free-form `options`
 // object. Typed request fields (seed, lyrics, duration, steps, guidance, the
 // edit window) are not listed: they have their own fields and win over this.
-// Path-valued options (noise_file, source_audio) are deliberately absent.
+// Path-valued options (noise_file, source_audio, and YuE2's abc_file,
+// semantic_prefix_file, nar_noise_file) are deliberately absent, and so are
+// YuE2's stop_after and export_semantic: a run stopped before the audio stage,
+// or one carrying a semantic artifact, is not a WAV this route can return.
 var musicFamilyOptions = map[string]map[string]bool{
 	"ace_step": setOf(
 		"bpm", "keyscale", "timesignature", "negative_prompt", "instruction",
@@ -97,6 +100,13 @@ var musicFamilyOptions = map[string]map[string]bool{
 		"repaint_injection_ratio", "complete_track_classes", "track_name",
 	),
 	"minimax_music3": setOf("ar_guidance_scale", "top_k"),
+	"yue2": setOf(
+		"cot", "abc", "semantic_prefix",
+		"abc_temperature", "abc_top_p", "abc_top_k", "abc_repetition_penalty",
+		"abc_penalty_window", "abc_min_tokens", "abc_max_tokens",
+		"semantic_temperature", "semantic_top_p", "semantic_top_k", "semantic_repetition_penalty",
+		"semantic_penalty_window", "semantic_min_tokens", "semantic_max_tokens",
+	),
 }
 
 func setOf(keys ...string) map[string]bool {
@@ -459,6 +469,18 @@ func buildMusicUpstream(route musicRoute, family string, req musicRequest) (uint
 		}
 		if family == "minimax_music3" && strings.TrimSpace(opts["lyrics"]) == "" {
 			return 0, nil, nil, musicError("lyrics are required for MiniMax Music")
+		}
+		if family == "yue2" {
+			// YuE2 takes its prompt as the style option, and reads lyrics from the
+			// text input when the lyrics option is absent, which would sing the
+			// style tags. An empty lyrics option is its instrumental request.
+			opts["style"] = req.Prompt
+			if req.Lyrics == nil {
+				opts["lyrics"] = ""
+			}
+			if req.Duration != nil {
+				return 0, nil, nil, musicError("YuE2 has no duration: the song is as long as its lyrics")
+			}
 		}
 		if req.Duration != nil {
 			if *req.Duration <= 0 {

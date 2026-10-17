@@ -102,8 +102,11 @@ Also here: `turns_design.md` — the turn runner's design notes.
   validate it as WAV, write it to `<CacheDir>/audiocpp-tmp/in-<random>.wav` (0600, removed after
   the request, anything older than an hour swept), and pass audio.cpp an absolute path it built
   itself. Options go through a per-family whitelist (`musicFamilyOptions`) that names no path
-  option; an unknown key is a 400. The seed is always sent explicitly (a random u32 when the
-  caller gave none) and echoed in `X-Seed`, so every result is reproducible. Input passes through
+  option; an unknown key is a 400. YuE2 takes its prompt as the `style` option and reads lyrics
+  from the task's `text` when the `lyrics` option is absent, so the route always sends `lyrics`
+  (empty = instrumental) or it would sing the style tags; it also 400s a `duration`. The seed
+  is always sent explicitly (a random u32 when the caller gave none) and echoed in `X-Seed`, so
+  every result is reproducible. Input passes through
   byte for byte unless the family has a hard rate (HTDemucs: 44.1 kHz, `musicFamilyInputRate`),
   which is the only case `musicwav.go` resamples; ACE-Step resamples its own input, and re-encoding
   it here would make an edit differ from the CLI fed the same file.

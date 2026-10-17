@@ -75,7 +75,7 @@ const (
 // codecs, alignment, diarization and speech-to-speech have no class, route or
 // UI here yet. Music and separation ARE served, but only for the families whose
 // request options the typed routes in internal/server/musicapi.go know
-// (ace_step, minimax_music3, htdemucs): each family reads a different option
+// (ace_step, minimax_music3, yue2, htdemucs): each family reads a different option
 // set, and one the route has no whitelist for would 400 every request.
 //
 // A family MISSING from this table is one upstream added after the table was
@@ -86,78 +86,102 @@ const (
 // speech synthesizer whose voice must come from a reference clip rather than a
 // preset, which is a request-shape difference, not a different class.
 var audioCppFamilies = map[string]int{
-	"ace_step":             audioClsMusic,             // music,edit (supported)
-	"audio8_asr":           audioClsASR,               // asr (community)
-	"audio8_tts":           audioClsTTS,               // tts,clone (community)
-	"audiosr":              0,                         // s2s (experimental)
-	"breeze_tts":           audioClsTTS,               // tts,clone,design (supported)
-	"bs_roformer":          0,                         // sep (supported)
-	"chatterbox":           audioClsTTS,               // tts,clone,vc (supported)
-	"chatterbox_turbo":     audioClsTTS,               // tts (testing)
-	"citrinet_asr":         audioClsASR,               // asr (supported)
-	"confucius4_tts":       audioClsTTS,               // clone (experimental)
-	"controlfoley":         0,                         // sfx (experimental)
-	"cosyvoice3":           audioClsTTS,               // tts,clone (supported)
-	"dots_tts":             audioClsTTS,               // tts,clone (supported)
-	"dramabox":             audioClsTTS,               // tts,clone (experimental)
-	"echo_tts":             audioClsTTS,               // clone (experimental)
-	"f5_tts":               audioClsTTS,               // tts,clone (community)
-	"firered_audio":        audioClsTTS | audioClsASR, // asr,tts,clone,design,edit (experimental)
-	"fireredtts3":          audioClsTTS,               // tts,clone,design (experimental)
-	"fish_audio":           audioClsTTS,               // tts,clone (supported)
-	"fun_asr_nano":         audioClsASR,               // asr (wip)
-	"glm_tts":              audioClsTTS,               // tts,clone (community)
-	"granite5asr":          audioClsASR,               // asr (supported)
-	"heartmula":            0,                         // music (supported)
-	"higgs_audio_stt":      audioClsASR,               // asr (supported)
-	"higgs_audio_tts":      audioClsTTS,               // tts,clone (supported)
-	"htdemucs":             audioClsSep,               // sep (supported)
-	"hviske_asr":           audioClsASR,               // asr (supported)
-	"index_tts2":           audioClsTTS,               // tts,clone (supported)
-	"inflect_v2":           audioClsTTS,               // tts (community)
-	"irodori_tts":          audioClsTTS,               // tts,clone,design (supported)
-	"kroko_asr":            audioClsASR,               // asr (community)
-	"magpie_tts":           audioClsTTS,               // tts (supported)
-	"meanvc2":              0,                         // vc (supported)
-	"mel_band_roformer":    0,                         // sep (supported)
-	"midashenglm_gen":      0,                         // music (experimental)
-	"minimax_h3":           0,                         // tts,music,sfx (experimental)
-	"minimax_music3":       audioClsMusic,             // music (experimental)
-	"miocodec":             0,                         // codec,vc,s2s (supported)
-	"miotts":               audioClsTTS,               // tts,clone (supported)
-	"mira_tts":             audioClsTTS,               // tts,clone (experimental)
-	"mms_forced_aligner":   0,                         // align (community)
-	"moss_tts_local":       audioClsTTS,               // tts,clone (supported)
-	"moss_tts_nano":        audioClsTTS,               // tts,clone (supported)
-	"moss_voicegen":        0,                         // vdes (community)
-	"muscriptor":           0,                         // midi (supported)
-	"nemotron_asr":         audioClsASR,               // asr (supported)
-	"neutts":               audioClsTTS,               // tts (supported)
-	"omnivoice":            audioClsTTS,               // tts,clone,design (supported)
-	"outetts":              audioClsTTS,               // tts,clone (community)
-	"parakeet_tdt":         audioClsASR,               // asr (community)
-	"personaplex":          0,                         // s2s (supported)
-	"pocket_tts":           audioClsTTS,               // tts,clone (supported)
-	"qwen3_asr":            audioClsASR,               // asr (supported)
-	"qwen3_forced_aligner": 0,                         // align (supported)
-	"qwen3_tts":            audioClsTTS,               // tts,clone,design (supported)
-	"rvc":                  0,                         // vc (experimental)
-	"sanotts":              audioClsTTS,               // tts (community)
-	"seed_vc":              0,                         // vc,svc (supported)
-	"sense_asr":            audioClsASR,               // asr (community)
-	"soprano_tts":          audioClsTTS,               // tts (community)
-	"sopro_tts":            audioClsTTS,               // tts,clone (community)
-	"sortformer_diar":      0,                         // diar (supported)
-	"stable_audio":         0,                         // music,sfx,edit (supported)
-	"supertonic":           audioClsTTS,               // tts (supported)
-	"vevo2":                audioClsTTS,               // tts,music,vc,edit,svc,s2s (supported)
-	"vibeasr":              audioClsASR,               // asr (community)
-	"vibevoice":            audioClsTTS,               // tts (supported)
-	"vibevoice_asr":        audioClsASR,               // asr (supported)
-	"vietneu_tts":          audioClsTTS,               // tts,clone (community)
-	"voxcpm1":              audioClsTTS,               // tts,clone (supported)
-	"voxcpm2":              audioClsTTS,               // tts,clone,design (supported)
-	"voxtral_realtime":     audioClsASR,               // asr (supported)
+	"ace_step":                audioClsMusic,             // music,edit (supported)
+	"apollo":                  0,                         // s2s (supported)
+	"audio8_asr":              audioClsASR,               // asr (community)
+	"audio8_tts":              audioClsTTS,               // tts,clone (community)
+	"audiosr":                 0,                         // s2s (experimental)
+	"auk":                     0,                         // tts,edit (experimental): a folder of three components (generator + Qwen2.5-Omni conditioner + VAE), not wired
+	"breeze_tts":              audioClsTTS,               // tts,clone,design (supported)
+	"bs_roformer":             0,                         // sep (supported)
+	"builtin_audio_utils":     0,                         // s2s (experimental)
+	"canary_asr":              audioClsASR,               // asr (supported)
+	"chatterbox":              audioClsTTS,               // tts,clone,vc (supported)
+	"chatterbox_turbo":        audioClsTTS,               // tts (testing)
+	"citrinet_asr":            audioClsASR,               // asr (supported)
+	"cohere_asr":              audioClsASR,               // asr (supported)
+	"confucius4_r2t2":         audioClsASR,               // asr (community)
+	"confucius4_tts":          audioClsTTS,               // clone (experimental)
+	"controlfoley":            0,                         // sfx (experimental)
+	"cosyvoice3":              audioClsTTS,               // tts,clone (supported)
+	"dots_tts":                audioClsTTS,               // tts,clone (supported)
+	"dramabox":                audioClsTTS,               // tts,clone (experimental)
+	"echo_tts":                audioClsTTS,               // clone (experimental)
+	"f5_tts":                  audioClsTTS,               // tts,clone (community)
+	"firered_audio":           audioClsTTS | audioClsASR, // asr,tts,clone,design,edit (experimental)
+	"fireredtts3":             audioClsTTS,               // tts,clone,design (experimental)
+	"fish_audio":              audioClsTTS,               // tts,clone (supported)
+	"fun_asr_nano":            audioClsASR,               // asr (wip)
+	"glm_tts":                 audioClsTTS,               // tts,clone (community)
+	"granite5asr":             audioClsASR,               // asr (supported)
+	"heartmula":               0,                         // music (supported)
+	"higgs_audio_stt":         audioClsASR,               // asr (supported)
+	"higgs_audio_tts":         audioClsTTS,               // tts,clone (supported)
+	"htdemucs":                audioClsSep,               // sep (supported)
+	"hviske_asr":              audioClsASR,               // asr (supported)
+	"index_tts2":              audioClsTTS,               // tts,clone (supported)
+	"inflect_v2":              audioClsTTS,               // tts (community)
+	"irodori_tts":             audioClsTTS,               // tts,clone,design (supported)
+	"kitten_tts":              audioClsTTS,               // tts (community)
+	"kokoro_tts":              audioClsTTS,               // tts (community)
+	"kroko_asr":               audioClsASR,               // asr (community)
+	"liveavatar":              0,                         // sfx (experimental)
+	"magpie_tts":              audioClsTTS,               // tts (supported)
+	"meanvc2":                 0,                         // vc (supported)
+	"mel_band_roformer":       0,                         // sep (supported)
+	"midashenglm_gen":         0,                         // music (experimental)
+	"minimax_h3":              0,                         // tts,music,sfx (experimental)
+	"minimax_music3":          audioClsMusic,             // music (experimental)
+	"miocodec":                0,                         // codec,vc,s2s (supported)
+	"miotts":                  audioClsTTS,               // tts,clone (supported)
+	"mira_tts":                audioClsTTS,               // tts,clone (experimental)
+	"mms_forced_aligner":      0,                         // align (community)
+	"moonshine_asr":           audioClsASR,               // asr (experimental)
+	"moss_transcribe_diarize": audioClsASR,               // asr (supported)
+	"moss_tts_local":          audioClsTTS,               // tts,clone (supported)
+	"moss_tts_nano":           audioClsTTS,               // tts,clone (supported)
+	"moss_tts_v15":            audioClsTTS,               // tts,clone (experimental)
+	"moss_ttsd":               audioClsTTS,               // tts,clone (experimental)
+	"moss_voicegen":           0,                         // vdes (community)
+	"muscriptor":              0,                         // midi (supported)
+	"nemotron_3_diar":         0,                         // diar (supported)
+	"nemotron_asr":            audioClsASR,               // asr (supported)
+	"neutts":                  audioClsTTS,               // tts (supported)
+	"niagara_asr":             audioClsASR,               // asr (supported)
+	"omnivoice":               audioClsTTS,               // tts,clone,design (supported)
+	"outetts":                 audioClsTTS,               // tts,clone (community)
+	"parakeet_tdt":            audioClsASR,               // asr (community)
+	"personaplex":             0,                         // s2s (supported)
+	"piper_tts":               audioClsTTS,               // tts (community)
+	"pocket_tts":              audioClsTTS,               // tts,clone (supported)
+	"pulsevad":                0,                         // vad (supported)
+	"qwen3_asr":               audioClsASR,               // asr (supported)
+	"qwen3_forced_aligner":    0,                         // align (supported)
+	"qwen3_tts":               audioClsTTS,               // tts,clone,design (supported)
+	"rvc":                     0,                         // vc (experimental)
+	"sanotts":                 audioClsTTS,               // tts (community)
+	"seed_vc":                 0,                         // vc,svc (supported)
+	"sense_asr":               audioClsASR,               // asr (community)
+	"sheetsage2":              0,                         // midi (supported)
+	"soprano_tts":             audioClsTTS,               // tts (community)
+	"sopro_tts":               audioClsTTS,               // tts,clone (community)
+	"sortformer_diar":         0,                         // diar (supported)
+	"sortformer_diar_v2":      0,                         // diar (community)
+	"stable_audio":            0,                         // music,sfx,edit (supported)
+	"supertonic":              audioClsTTS,               // tts (supported)
+	"universr":                0,                         // s2s (supported)
+	"vevo2":                   audioClsTTS,               // tts,music,vc,edit,svc,s2s (supported)
+	"vibeasr":                 audioClsASR,               // asr (community)
+	"vibevoice":               audioClsTTS,               // tts (supported)
+	"vibevoice_asr":           audioClsASR,               // asr (supported)
+	"vibevoice_asr_streaming": audioClsASR,               // asr (supported)
+	"vieneu_v3_turbo":         audioClsTTS,               // tts,clone (community)
+	"vietneu_tts":             audioClsTTS,               // tts,clone (community)
+	"voxcpm1":                 audioClsTTS,               // tts,clone (supported)
+	"voxcpm2":                 audioClsTTS,               // tts,clone,design (supported)
+	"voxtral_realtime":        audioClsASR,               // asr (supported)
+	"yue2":                    audioClsMusic,             // music (supported)
+	"zipvoice":                audioClsTTS,               // tts,clone (community)
 }
 
 // audioCppClones lists the families that can register a NEW voice from a
@@ -173,6 +197,8 @@ var audioCppClones = map[string]bool{
 	"moss_tts_nano": true, "omnivoice": true, "outetts": true,
 	"pocket_tts": true, "qwen3_tts": true, "sopro_tts": true,
 	"vietneu_tts": true, "voxcpm1": true, "voxcpm2": true,
+	"moss_tts_v15": true, "moss_ttsd": true, "vieneu_v3_turbo": true,
+	"zipvoice": true,
 }
 
 // audioCppMusicEdits lists the music families that implement the edit routes
@@ -204,6 +230,29 @@ var audioCppDirFamilies = map[string]string{"minimax_music3": "vocoder.gguf"}
 // and flow transformer are both on disk; the RVQ depth decoder falls back to
 // q8_0, which the q4_0 package ships in place of a q4_0 one.
 var audioCppDirQuants = []string{"bf16", "q8_0", "q4_0"}
+
+// audioCppCompanion describes a family whose model is one main gguf plus a
+// companion gguf beside it in the same folder. audio.cpp loads the FOLDER and is
+// told both file names through session options, which are relative to it.
+type audioCppCompanion struct {
+	mainOption, companionOption string
+	// prefix is the companion's file-name prefix: it is what marks a
+	// family-less gguf (the companion's header carries no family id) as part of
+	// the package rather than a broken export.
+	prefix string
+	// files are the companion files to look for, best first.
+	files []string
+}
+
+// audioCppCompanions are the main-plus-companion families. YuE2 publishes its
+// 3B AR/NAR model per quant and its Oobleck VAE per precision as separate
+// packages into one folder; only the main file carries family=yue2.
+var audioCppCompanions = map[string]audioCppCompanion{
+	"yue2": {
+		mainOption: "yue2.model_gguf", companionOption: "yue2.vae_gguf",
+		prefix: "yue2-vae-", files: []string{"yue2-vae-f16.gguf", "yue2-vae-f32.gguf"},
+	},
+}
 
 // audioCppMusicOverheadGB is audioCppOverheadGB for a music generator: a song
 // is minutes of audio latent plus a vocoder decode over all of it, which is not
@@ -438,6 +487,12 @@ func emitAudioCppModel(b *strings.Builder, s Settings, row GgufRow, ov *Override
 			fmt.Fprintf(b, "\n  # %s: component of the %s package in %s, emitted with its %s\n", name, fam, filepath.ToSlash(filepath.Dir(row.FullPath)), audioCppDirFamilies[fam])
 			return
 		}
+		for fam, c := range audioCppCompanions {
+			if strings.HasPrefix(strings.ToLower(row.FileName), c.prefix) {
+				fmt.Fprintf(b, "\n  # %s: component of the %s package in %s, emitted with its main model\n", name, fam, filepath.ToSlash(filepath.Dir(row.FullPath)))
+				return
+			}
+		}
 		// Nothing can be done from here: family is a required field of the config
 		// entry, and it is the one thing the server cannot work out for itself
 		// from the weights. A conversion that dropped the spec (a third-party
@@ -466,8 +521,32 @@ func emitAudioCppModel(b *strings.Builder, s Settings, row GgufRow, ov *Override
 	if task == "gen" {
 		overhead = audioCppMusicOverheadGB
 	}
+	if c, ok := audioCppCompanions[family]; ok {
+		emitAudioCppCompanionModel(b, s, row, ov, name, family, task, c, overhead, emitted)
+		return
+	}
 	writeAudioCppEntry(b, s, row, ov, name, family, task, strings.ReplaceAll(row.FullPath, "\\", "/"), audioCppFamilySessionOptions[family], row.SizeGB, row.SizeGB+overhead)
 	*emitted = append(*emitted, name)
+}
+
+// emitAudioCppCompanionModel emits a main-plus-companion family's main gguf as
+// a folder model, both files pinned through session options. Each main quant
+// in the folder is its own model sharing the one companion. With no companion
+// on disk there is nothing to load, so the YAML says which file is missing.
+func emitAudioCppCompanionModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, family, task string, c audioCppCompanion, overhead float64, emitted *[]string) {
+	dir := filepath.Dir(row.FullPath)
+	for _, f := range c.files {
+		fi, err := os.Stat(filepath.Join(dir, f))
+		if err != nil || fi.IsDir() || fi.Size() <= 0 {
+			continue
+		}
+		weights := row.SizeGB + float64(fi.Size())/(1<<30)
+		opts := map[string]string{c.mainOption: row.FileName, c.companionOption: f}
+		writeAudioCppEntry(b, s, row, ov, name, family, task, strings.ReplaceAll(dir, "\\", "/"), opts, round(weights, 2), weights+overhead)
+		*emitted = append(*emitted, name)
+		return
+	}
+	fmt.Fprintf(b, "\n  # SKIPPED %s: %s needs its companion %s in %s (a download may still be running)\n", name, family, strings.Join(c.files, " or "), filepath.ToSlash(dir))
 }
 
 // writeAudioCppEntry writes one audiocpp_server model entry. path is what the

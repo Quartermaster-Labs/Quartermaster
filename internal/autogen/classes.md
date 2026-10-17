@@ -12,7 +12,7 @@ everything that is not the LLM path. Backend *selection* is in
 | `image.go` | Diffusion / image generation (sd-server) |
 | `decision.go` | llama.cpp decision models (`/v1/systemone`) |
 | `embedding.go` | Text embedders |
-| `audiocpp.go` | audio.cpp — one engine serving tts, asr, music and separation, 72 families |
+| `audiocpp.go` | audio.cpp — one engine serving tts, asr, music and separation, 96 families |
 | `audio.go` | TTS — **two engines** (qwentts.cpp, TTS.cpp) |
 | `asr.go` | Speech-to-text (parakeet.cpp) |
 
@@ -303,7 +303,7 @@ than a full swap on every dictation.
 ## audio.cpp (`audiocpp.go`) - one engine, two classes
 
 `audiocpp_server` (upstream `0xShug0/audio.cpp`, catalogued as the `audiocpp-server` component)
-serves 72 model families behind one binary. It is dispatched **before** both legacy speech
+serves 96 model families behind one binary. It is dispatched **before** both legacy speech
 engines, because the routing question is already answered in the file: an audio.cpp conversion
 writes `general.architecture = audiocpp` and `audiocpp.model_spec.family = <family>` into the
 GGUF header, so `IsAudioCppModel` is an exact test and the family needs no filename heuristic
@@ -398,7 +398,7 @@ of the generated `audiocpp:` block), but the resolver does not rely on the clien
 
 ### Music and separation (`gen` / `sep`)
 
-`ace_step` and `minimax_music3` are task `gen` (capability `music`, plus `musicEdit` for
+`ace_step`, `minimax_music3` and `yue2` are task `gen` (capability `music`, plus `musicEdit` for
 ace_step, the only one with repaint/complete/cover), `htdemucs` is task `sep` (capability
 `separation`). They have no speech in/out, so they land on the Music tab, not Speech, and are
 answered by the typed routes in `internal/server/musicapi.go`. Other music families
@@ -425,3 +425,13 @@ prefix**, though `model_specs` lists them bare: the server ignores a bare key an
 the spec default (`language_model_q4_0.gguf`), failing the load with "file does not exist". A quant missing its language model or
 transformer is not emitted; with none complete the package is a `# SKIPPED ... no complete quant`
 comment, which is also what a half-finished download looks like.
+
+**YuE2 is a main gguf plus a VAE companion in one folder** (`audioCppCompanions`). Upstream
+publishes the 3B model per quant (`yue2-3b-<q>.gguf`) and the VAE per precision
+(`yue2-vae-f16|f32.gguf`) as separate packages into the same directory, and only the MAIN file
+carries `family=yue2`. So the main file anchors the emit (one model per main quant, named from
+the file), `path` is the folder, and `yue2.model_gguf` / `yue2.vae_gguf` pin both files (f16
+preferred). A family-less gguf whose name starts `yue2-vae-` is a component note, not the
+"no family in header" SKIP a broken export gets; a main file with no VAE beside it is a
+`# SKIPPED ... needs its companion` comment. `auk` has the same shape with THREE components
+(generator, a Qwen2.5-Omni-3B conditioner, VAE) and is experimental, so it stays at 0.

@@ -466,3 +466,64 @@ func TestEmitAudioCppModel_MiniMaxIncomplete(t *testing.T) {
 		t.Errorf("emitted = %v for an incomplete package, want none", emitted)
 	}
 }
+
+// YuE2 is a folder model: the main gguf carries the family and anchors the
+// emit, the VAE beside it carries none and is a component, not a broken export.
+func TestEmitAudioCppModel_Yue2Companion(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "Yue2-3B-GGUF")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeGgufKVs(t, filepath.Join(dir, "yue2-3b-q8_0.gguf"), [][2]any{
+		{"general.architecture", "audiocpp"},
+		{"audiocpp.model_spec.family", "yue2"},
+	})
+	s := audioCppSettings("vulkan")
+	meta := Metadata{Architecture: "audiocpp", AudioFamily: "yue2"}
+	main := miniMaxRow(filepath.Join(dir, "yue2-3b-q8_0.gguf"))
+
+	// No VAE yet: nothing loadable, and the YAML names the missing file.
+	var b strings.Builder
+	var emitted []string
+	emitAudioCppModel(&b, s, main, &Override{}, "yue2-3b-q8_0", meta, &emitted)
+	if out := b.String(); !strings.Contains(out, "SKIPPED yue2-3b-q8_0: yue2 needs its companion yue2-vae-f16.gguf") || len(emitted) != 0 {
+		t.Fatalf("emitted = %v without a VAE:\n%s", emitted, out)
+	}
+
+	for _, f := range []string{"yue2-vae-f16.gguf", "yue2-vae-f32.gguf"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("placeholder-weights"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b.Reset()
+	emitAudioCppModel(&b, s, main, &Override{}, "yue2-3b-q8_0", meta, &emitted)
+	out := b.String()
+	for _, want := range []string{
+		`"yue2-3b-q8_0":`,
+		`family: "yue2"`,
+		`task: "gen"`,
+		`path: "` + filepath.ToSlash(dir) + `"`,
+		`yue2.model_gguf: "yue2-3b-q8_0.gguf"`,
+		`yue2.vae_gguf: "yue2-vae-f16.gguf"`,
+		"music: true",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("emitted YAML missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "musicEdit") {
+		t.Errorf("YuE2 entry advertises musicEdit:\n%s", out)
+	}
+	if want := []string{"yue2-3b-q8_0"}; !reflect.DeepEqual(emitted, want) {
+		t.Fatalf("emitted = %v, want %v", emitted, want)
+	}
+
+	// The family-less VAE is explained by its package, not skipped.
+	b.Reset()
+	emitted = nil
+	emitAudioCppModel(&b, s, miniMaxRow(filepath.Join(dir, "yue2-vae-f16.gguf")), &Override{},
+		"yue2-vae-f16", Metadata{Architecture: "audiocpp"}, &emitted)
+	if out := b.String(); !strings.Contains(out, "component of the yue2 package") || strings.Contains(out, "SKIPPED") || len(emitted) != 0 {
+		t.Errorf("VAE emit = %v:\n%s", emitted, out)
+	}
+}

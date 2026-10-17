@@ -330,7 +330,10 @@ const hashCacheSuffix = ".modelhash"
 // seed reproduce byte for byte regardless of what the process rendered before.
 // v105: MiniMax Music 3 session options carry the family prefix audio.cpp
 // looks them up by; bare keys were ignored and the server wanted q4_0 files.
-const genVersion = "v105"
+// v106: the 24 audio.cpp families upstream added since the table was written
+// are classified (TTS/ASR emitted, the rest skipped by name), and YuE2 is
+// emitted as a folder model with its VAE companion.
+const genVersion = "v106"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

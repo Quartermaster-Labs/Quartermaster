@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tip } from "../../lib/tooltip";
   import Toggle from "../Toggle.svelte";
+  import Select from "../Select.svelte";
   import { get } from "svelte/store";
   import { models } from "../../stores/api";
   import { userPref } from "../../stores/prefs";
@@ -76,6 +77,14 @@
   const keyStore = userPref<string>("playground-music-key", "");
   const timeSigStore = userPref<string>("playground-music-timesig", "");
   const negativeStore = userPref<string>("playground-music-negative", "");
+  const cotStore = userPref<string>("playground-music-cot", "");
+
+  const COT_OPTIONS = [
+    { value: "", label: "model (full)" },
+    { value: "full", label: "full" },
+    { value: "melody", label: "melody" },
+    { value: "off", label: "off" },
+  ];
 
   const CAP: Record<Mode, string> = { create: "music_generation", edit: "music_edit", stems: "audio_separation" };
   const STORE: Record<Mode, typeof genModelStore> = { create: genModelStore, edit: editModelStore, stems: stemsModelStore };
@@ -124,11 +133,13 @@
   let model = $derived(mode === "create" ? $genModelStore : mode === "edit" ? $editModelStore : $stemsModelStore);
 
   // MiniMax Music 3 requires lyrics and takes none of ACE-Step's metadata
-  // options. The server keys this off the generated family, which the catalog
-  // does not ship; the id is the next best thing, and the server's 400 is the
-  // backstop if a rename ever fools it.
+  // options. YuE2 takes none of them either, and has no length: the song is as
+  // long as its lyrics, so a duration is a 400. The server keys this off the
+  // generated family, which the catalog does not ship; the id is the next best
+  // thing, and the server's 400 is the backstop if a rename ever fools it.
   let isMiniMax = $derived(/minimax/i.test(model));
-  let isAce = $derived(mode !== "stems" && !isMiniMax);
+  let isYue = $derived(/yue/i.test(model));
+  let isAce = $derived(mode !== "stems" && !isMiniMax && !isYue);
 
   // --- source clip (edit + stems) -------------------------------------------
   // `url` is what the player plays: a /api/media ref for a take, an object URL
@@ -249,10 +260,12 @@
     return s.trim() && Number.isFinite(n) ? n : undefined;
   }
 
-  // Collected from the form at press time. Options go only to ACE-Step: the
-  // server whitelists per family and answers an unknown key with a 400.
-  function aceOptions(): Record<string, string | number> {
+  // Collected from the form at press time. Each family gets only its own
+  // options: the server whitelists per family and answers an unknown key with
+  // a 400.
+  function familyOptions(): Record<string, string | number> {
     const o: Record<string, string | number> = {};
+    if (isYue && get(cotStore)) o.cot = get(cotStore);
     if (!isAce) return o;
     const bpm = num(get(bpmStore));
     if (bpm !== undefined) o.bpm = Math.round(bpm);
@@ -409,14 +422,14 @@
     const lyrics = get(lyricsStore);
     if (lyrics.trim()) t.lyrics = lyrics;
     const dur = num(get(durationStore));
-    if (dur !== undefined && dur > 0 && (task === "generate" || task === "complete")) t.duration = dur;
+    if (!isYue && dur !== undefined && dur > 0 && (task === "generate" || task === "complete")) t.duration = dur;
     const seed = parsedSeed();
     if (seed !== undefined) t.seed = seed;
     const steps = num(get(stepsStore));
     if (steps !== undefined) t.steps = Math.round(steps);
     const guidance = num(get(guidanceStore));
     if (guidance !== undefined) t.guidance = guidance;
-    const options = aceOptions();
+    const options = familyOptions();
     if (task === "cover") options.audio_cover_strength = coverStrength;
     if (Object.keys(options).length) t.options = options;
     if (src) {
@@ -546,6 +559,7 @@
     keyStore.set(typeof o.keyscale === "string" ? o.keyscale : "");
     timeSigStore.set(o.timesignature !== undefined ? String(o.timesignature) : "");
     negativeStore.set(typeof o.negative_prompt === "string" ? o.negative_prompt : "");
+    cotStore.set(typeof o.cot === "string" ? o.cot : "");
     if (t.task !== "generate") editTask = t.task;
     if (t.task === "repaint") {
       winStart = t.start ?? winStart;
@@ -748,7 +762,7 @@
             </div>
 
             <div class="flex items-end gap-2">
-              {#if mode === "create" || editTask === "complete"}
+              {#if !isYue && (mode === "create" || editTask === "complete")}
                 <label class="w-20 flex flex-col gap-0.5 text-micro text-txtsecondary">
                   Length (s)
                   <input type="number" min="1" step="1" bind:value={$durationStore} placeholder="auto" class={inputCls} />
@@ -795,6 +809,15 @@
                     Language
                     <input type="text" bind:value={$languageStore} placeholder="en" class={inputCls} />
                   </label>
+                  {#if isYue}
+                    <label
+                      class="flex flex-col gap-0.5 text-micro text-txtsecondary"
+                      use:tip={"YuE2 can write a score (ABC) before the music: full plans the whole song, melody only the tune, off goes straight to audio"}
+                    >
+                      Planning
+                      <Select bind:value={$cotStore} options={COT_OPTIONS} ariaLabel="Planning" />
+                    </label>
+                  {/if}
                   {#if isAce}
                     <label class="flex flex-col gap-0.5 text-micro text-txtsecondary">
                       BPM
