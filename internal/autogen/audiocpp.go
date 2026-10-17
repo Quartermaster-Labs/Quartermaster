@@ -312,21 +312,20 @@ func ggufF16GB(path string, fileGB float64) float64 {
 // told both file names through session options, which are relative to it.
 type audioCppCompanion struct {
 	mainOption, companionOption string
-	// prefix is the companion's file-name prefix: it is what marks a
-	// family-less gguf (the companion's header carries no family id) as part of
-	// the package rather than a broken export.
-	prefix string
 	// files are the companion files to look for, best first.
 	files []string
 }
 
 // audioCppCompanions are the main-plus-companion families. YuE2 publishes its
 // 3B AR/NAR model per quant and its Oobleck VAE per precision as separate
-// packages into one folder; only the main file carries family=yue2.
+// packages into one folder; only the main file carries family=yue2. The VAE
+// never reaches this emitter as a row of its own: discovery drops any "-vae"
+// file as a diffusion component (encoderFileRe), and the main model finds it
+// by name.
 var audioCppCompanions = map[string]audioCppCompanion{
 	"yue2": {
 		mainOption: "yue2.model_gguf", companionOption: "yue2.vae_gguf",
-		prefix: "yue2-vae-", files: []string{"yue2-vae-f16.gguf", "yue2-vae-f32.gguf"},
+		files: []string{"yue2-vae-f16.gguf", "yue2-vae-f32.gguf"},
 	},
 }
 
@@ -562,12 +561,6 @@ func emitAudioCppModel(b *strings.Builder, s Settings, row GgufRow, ov *Override
 		if fam := audioCppDirPackageFamily(filepath.Dir(row.FullPath)); fam != "" {
 			fmt.Fprintf(b, "\n  # %s: component of the %s package in %s, emitted with its %s\n", name, fam, filepath.ToSlash(filepath.Dir(row.FullPath)), audioCppDirFamilies[fam])
 			return
-		}
-		for fam, c := range audioCppCompanions {
-			if strings.HasPrefix(strings.ToLower(row.FileName), c.prefix) {
-				fmt.Fprintf(b, "\n  # %s: component of the %s package in %s, emitted with its main model\n", name, fam, filepath.ToSlash(filepath.Dir(row.FullPath)))
-				return
-			}
 		}
 		// Nothing can be done from here: family is a required field of the config
 		// entry, and it is the one thing the server cannot work out for itself

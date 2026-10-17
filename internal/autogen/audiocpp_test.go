@@ -587,13 +587,4 @@ func TestEmitAudioCppModel_Yue2Companion(t *testing.T) {
 	if want := []string{"yue2-3b-q8_0"}; !reflect.DeepEqual(emitted, want) {
 		t.Fatalf("emitted = %v, want %v", emitted, want)
 	}
-
-	// The family-less VAE is explained by its package, not skipped.
-	b.Reset()
-	emitted = nil
-	emitAudioCppModel(&b, s, miniMaxRow(filepath.Join(dir, "yue2-vae-f16.gguf")), &Override{},
-		"yue2-vae-f16", Metadata{Architecture: "audiocpp"}, &emitted)
-	if out := b.String(); !strings.Contains(out, "component of the yue2 package") || strings.Contains(out, "SKIPPED") || len(emitted) != 0 {
-		t.Errorf("VAE emit = %v:\n%s", emitted, out)
-	}
 }

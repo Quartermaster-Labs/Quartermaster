@@ -446,7 +446,8 @@ publishes the 3B model per quant (`yue2-3b-<q>.gguf`) and the VAE per precision
 (`yue2-vae-f16|f32.gguf`) as separate packages into the same directory, and only the MAIN file
 carries `family=yue2`. So the main file anchors the emit (one model per main quant, named from
 the file), `path` is the folder, and `yue2.model_gguf` / `yue2.vae_gguf` pin both files (f16
-preferred). A family-less gguf whose name starts `yue2-vae-` is a component note, not the
-"no family in header" SKIP a broken export gets; a main file with no VAE beside it is a
+preferred). The VAE never becomes a row of its own: discovery drops any `-vae` file as a
+diffusion component (`encoderFileRe`, `discover.go`), so it is found only by name from the
+main file. A main file with no VAE beside it is a
 `# SKIPPED ... needs its companion` comment. `auk` has the same shape with THREE components
 (generator, a Qwen2.5-Omni-3B conditioner, VAE) and is experimental, so it stays at 0.
