@@ -12,7 +12,7 @@ everything that is not the LLM path. Backend *selection* is in
 | `image.go` | Diffusion / image generation (sd-server) |
 | `decision.go` | llama.cpp decision models (`/v1/systemone`) |
 | `embedding.go` | Text embedders |
-| `audiocpp.go` | audio.cpp — one engine serving **two classes** (tts + asr), 72 families |
+| `audiocpp.go` | audio.cpp — one engine serving tts, asr, music and separation, 96 families |
 | `audio.go` | TTS — **two engines** (qwentts.cpp, TTS.cpp) |
 | `asr.go` | Speech-to-text (parakeet.cpp) |
 
@@ -303,7 +303,7 @@ than a full swap on every dictation.
 ## audio.cpp (`audiocpp.go`) - one engine, two classes
 
 `audiocpp_server` (upstream `0xShug0/audio.cpp`, catalogued as the `audiocpp-server` component)
-serves 72 model families behind one binary. It is dispatched **before** both legacy speech
+serves 96 model families behind one binary. It is dispatched **before** both legacy speech
 engines, because the routing question is already answered in the file: an audio.cpp conversion
 writes `general.architecture = audiocpp` and `audiocpp.model_spec.family = <family>` into the
 GGUF header, so `IsAudioCppModel` is an exact test and the family needs no filename heuristic
@@ -314,8 +314,8 @@ the server reads it out of the same file for itself).
 `audioCppFamilies` maps every upstream family to the classes it serves. Three ways a model is
 **deliberately dropped with a comment instead of an entry**, since no other engine here could
 serve it either: no family id in the header (a third-party `-orig` conversion that dropped the
-spec - we warn rather than guess), a known family we do not serve yet (music, separation, voice
-conversion, codec, align, diar, midi, s2s), and an unknown family (upstream added one; the table
+spec - we warn rather than guess), a known family we do not serve yet (voice conversion, codec,
+align, diar, midi, s2s, and music families other than the two below), and an unknown family (upstream added one; the table
 needs a row).
 
 ### It must never become a second scheduler
@@ -396,5 +396,58 @@ zero row and the emitter fell to its "no audio.cpp backend registered" path: a b
 offering the mismatch in the first place (`modelConfigResp.IsAudioCpp`, filled from the presence
 of the generated `audiocpp:` block), but the resolver does not rely on the client for that.
 
-Music (`ace_step`, `songbloom`, ...) is a follow-up: it needs a class of its own, a
-`/v1/tasks/run` base64-WAV translation handler and a UI tab.
+### Music and separation (`gen` / `sep`)
+
+`ace_step`, `minimax_music3` and `yue2` are task `gen` (capability `music`, plus `musicEdit` for
+ace_step, the only one with repaint/complete/cover), `htdemucs` is task `sep` (capability
+`separation`). They have no speech in/out, so they land on the Music tab, not Speech, and are
+answered by the typed routes in `internal/server/musicapi.go`. Other music families
+(`songbloom`, ...) stay `# SKIPPED`: the typed routes whitelist options per family, and a family
+with no row there would accept nothing but a prompt.
+
+A music generator is charged `audioCppMusicOverheadGB` (1 GB, an estimate: a song's latents and
+activations are larger than a sentence's) instead of the speech overhead.
+
+**ACE-Step always gets `ace_step.mem_saver: "true"`** (`audioCppFamilySessionOptions`). Without
+it a render that follows a LONGER one in the same process differs from the same seed rendered
+fresh (corr 0.9999, not byte-equal), so a seed stopped being a reproduction key. With it every
+render matched `audiocpp_cli` byte for byte, cold, warm and after a 30 s render, at no measurable
+cost on warm requests (Vulkan, 20 s: ~40 s either way).
+
+**MiniMax Music 3 is a DIRECTORY, not a file.** Only the shared `vocoder.gguf` /
+`condition_encoder.gguf` carry the family id; the per-quant `language_model_<q>.gguf`,
+`transformer_<q>.gguf` and `rvq_depth_decoder_<q>.gguf` carry none. `audioCppDirPackageFamily`
+recognises the package from its shared file, and `emitAudioCppDirModel` emits ONE model per
+complete quant (`<dir base minus -gguf>-<q>`), with `path` set to the directory and the quant's
+components named through `audiocpp.sessionOptions` (`minimax_music3.language_model_gguf`,
+`.rvq_depth_decoder_gguf`, `.flow_transformer_gguf`). **Session option keys carry the family
+prefix**, though `model_specs` lists them bare: the server ignores a bare key and falls back to
+the spec default (`language_model_q4_0.gguf`), failing the load with "file does not exist". A quant missing its language model or
+transformer is not emitted; with none complete the package is a `# SKIPPED ... no complete quant`
+comment, which is also what a half-finished download looks like.
+**On a Vulkan build the q8_0/q4_0 quants also get `minimax_music3.weight_type: f16`**
+(`miniMaxF16OnVulkan`): loaded native they render a hiss instead of music. bf16 is not the
+cause (audio.cpp already stores bf16 as f16 on Vulkan under `native`); dequantizing the q8_0
+tensors is what fixes it, so the bf16 quant is left alone, as is every other backend. Upstream's
+docs say not to combine `weight_type` with component selection; on Vulkan that advice is what
+produces the noise. The f16 load nearly doubles a q8_0 component (12.6 GB on disk, ~17 GB for
+the language model and depth decoder alone), so the entry is priced at the largest `mem_saver`
+stage (AR, then condition + flow, then vocoder: one resident at a time) from the header's
+`Metadata.ParamCount`, not at the sum of the files.
+That rule is only the AUTO answer. `Override.AudioWeightType` (`native` / `f16`, blank = auto,
+resolved by `miniMaxF16`) pins it either way from the model editor's "Weight storage" select,
+and the price follows the pin: f16 costs a q4_0 package the VRAM of a q8_0 one, which is a trade
+a user on a fixed build should be able to refuse. The select is shown only for families in
+`AudioCppWeightTypeFamilies`, because audio.cpp's `<family>.weight_type` takes a different value
+set per family. `AudioCppWeightTypeAuto` labels the Auto option with the pin-free rule.
+
+**YuE2 is a main gguf plus a VAE companion in one folder** (`audioCppCompanions`). Upstream
+publishes the 3B model per quant (`yue2-3b-<q>.gguf`) and the VAE per precision
+(`yue2-vae-f16|f32.gguf`) as separate packages into the same directory, and only the MAIN file
+carries `family=yue2`. So the main file anchors the emit (one model per main quant, named from
+the file), `path` is the folder, and `yue2.model_gguf` / `yue2.vae_gguf` pin both files (f16
+preferred). The VAE never becomes a row of its own: discovery drops any `-vae` file as a
+diffusion component (`encoderFileRe`, `discover.go`), so it is found only by name from the
+main file. A main file with no VAE beside it is a
+`# SKIPPED ... needs its companion` comment. `auk` has the same shape with THREE components
+(generator, a Qwen2.5-Omni-3B conditioner, VAE) and is experimental, so it stays at 0.

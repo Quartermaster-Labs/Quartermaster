@@ -397,7 +397,7 @@ type APIKeyEntry struct {
 // to /api/settings/root/pick, so a category missing here is a root the user can
 // set and see in the toolbar that is then never scanned. The pick handler
 // rejects anything not listed here so that failure is loud rather than silent.
-var CategoryOrder = []string{"llm", "image", "video", "3d", "segment", "tts", "transcribe", "embed", "decision"}
+var CategoryOrder = []string{"llm", "image", "video", "3d", "segment", "music", "tts", "transcribe", "embed", "decision"}
 
 // IsCategory reports whether name is a known UI category (i.e. a valid
 // CategoryRoots key).
@@ -862,6 +862,13 @@ type Override struct {
 	// LIST (llama's --device, see backenddev.go) or has one device by
 	// construction.
 	AudioDevice *int `yaml:"audioDevice"`
+	// AudioWeightType is how an audio.cpp model's weights are stored once
+	// loaded: "" => auto (AudioCppWeightTypeAuto), "native" => as the file
+	// ships them, "f16" => converted to f16 on load. Only families listed in
+	// AudioCppWeightTypeFamilies read it: audio.cpp's <family>.weight_type takes
+	// a different value set, and defaults differently, per family, so one
+	// fleet-wide knob would hand some of them a value they reject.
+	AudioWeightType string `yaml:"audioWeightType,omitempty"`
 	// CustomArgs is the user's launch-argument text, stored verbatim and applied
 	// as the last layer of the emitted command: for every knob the text sets, the
 	// generated occurrences are dropped, then the text is appended (last wins,

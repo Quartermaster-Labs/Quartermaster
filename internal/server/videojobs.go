@@ -202,10 +202,18 @@ type bufferedResponseWriter struct {
 	code   int
 	body   bytes.Buffer
 	over   bool
+	limit  int
 }
 
 func newBufferedResponseWriter() *bufferedResponseWriter {
-	return &bufferedResponseWriter{header: http.Header{}, code: http.StatusOK}
+	return newBufferedResponseWriterLimit(videoJobDocLimit)
+}
+
+// newBufferedResponseWriterLimit is a buffered writer that sets over past
+// limit bytes. The music routes need far more than a job document: four
+// separated stems of a long track are hundreds of MB of base64.
+func newBufferedResponseWriterLimit(limit int) *bufferedResponseWriter {
+	return &bufferedResponseWriter{header: http.Header{}, code: http.StatusOK, limit: limit}
 }
 
 func (b *bufferedResponseWriter) Header() http.Header { return b.header }
@@ -213,7 +221,7 @@ func (b *bufferedResponseWriter) Header() http.Header { return b.header }
 func (b *bufferedResponseWriter) WriteHeader(code int) { b.code = code }
 
 func (b *bufferedResponseWriter) Write(p []byte) (int, error) {
-	if b.body.Len()+len(p) > videoJobDocLimit {
+	if b.body.Len()+len(p) > b.limit {
 		b.over = true
 		return len(p), nil
 	}

@@ -6,26 +6,26 @@
   import { prettifyModelName, modelCategory, MODEL_CATEGORIES, type ModelCategory } from "../lib/modelUtils";
   import { formatSpeed, formatDuration, formatRelativeTime, shortReqPath } from "../lib/activityFormat";
   import ActiveModelsPanel from "../components/ActiveModelsPanel.svelte";
-  import { ArrowRight, MessageSquare, Image, Film, Box, Volume2, Mic, Layers, ScanLine, Split } from "lucide-svelte";
+  import { ArrowRight, MessageSquare, Image, Film, Box, Volume2, Mic, Layers, ScanLine, Split, Music } from "lucide-svelte";
   import type { Model } from "../lib/types";
   import { onMount } from "svelte";
   import { getHubDiskUsage, type HubDiskUsage } from "../lib/hubApi";
 
   // --- Categories ----------------------------------------------------------
-  // Five hues, not eight: segment, speech, embedding and decision are a handful of rows
+  // Five hues, not ten: segment, music, speech, embedding and decision are a handful of rows
   // each and share "other" (see the --color-cat-* note in index.css). Icons
   // stay per category, so they are still told apart up close.
   type Hue = "llm" | "image" | "video" | "3d" | "other";
   const HUE: Record<ModelCategory, Hue> = {
     llm: "llm", image: "image", video: "video", "3d": "3d",
-    segment: "other", tts: "other", transcribe: "other", embed: "other", decision: "other",
+    segment: "other", music: "other", tts: "other", transcribe: "other", embed: "other", decision: "other",
   };
   const HUE_LABEL: Record<Hue, string> = { llm: "Language", image: "Image", video: "Video", "3d": "3D", other: "Other" };
   const HUE_SHORT: Record<Hue, string> = { llm: "llm", image: "img", video: "vid", "3d": "3d", other: "other" };
   const HUES: Hue[] = ["llm", "image", "video", "3d", "other"];
   const ICON = {
     llm: MessageSquare, image: Image, video: Film, "3d": Box,
-    segment: ScanLine, tts: Volume2, transcribe: Mic, embed: Layers, decision: Split,
+    segment: ScanLine, music: Music, tts: Volume2, transcribe: Mic, embed: Layers, decision: Split,
   } satisfies Record<ModelCategory, unknown>;
   const hueVar = (h: Hue) => `var(--color-cat-${h})`;
 
@@ -191,6 +191,7 @@
     if (p.includes("video")) return { label: "video", icon: Film };
     if (p.includes("images") || p.startsWith("sdapi")) return { label: "image", icon: Image };
     if (p.includes("transcriptions")) return { label: "transcribe", icon: Mic };
+    if (p.includes("music") || p.includes("separations")) return { label: "music", icon: Music };
     if (p.includes("audio") || p.includes("speech")) return { label: "speech", icon: Volume2 };
     if (p.includes("embeddings")) return { label: "embed", icon: Layers };
     if (p.includes("systemone")) return { label: "decision", icon: Split };

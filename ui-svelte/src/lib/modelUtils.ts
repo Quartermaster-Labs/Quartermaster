@@ -16,7 +16,7 @@ export function prettifyModelName(s: string): string {
     .join(" ");
 }
 
-export type ModelCategory = "llm" | "image" | "video" | "3d" | "segment" | "tts" | "transcribe" | "embed" | "decision";
+export type ModelCategory = "llm" | "image" | "video" | "3d" | "segment" | "music" | "tts" | "transcribe" | "embed" | "decision";
 
 // Sub-menu order under the Models tab. LLM is the catch-all default.
 export const MODEL_CATEGORIES: { id: ModelCategory; label: string }[] = [
@@ -25,6 +25,7 @@ export const MODEL_CATEGORIES: { id: ModelCategory; label: string }[] = [
   { id: "video", label: "Video" },
   { id: "3d", label: "3D" },
   { id: "segment", label: "Segment" },
+  { id: "music", label: "Music" },
   { id: "tts", label: "TTS" },
   { id: "transcribe", label: "Transcribe" },
   { id: "embed", label: "Embed" },
@@ -45,6 +46,9 @@ export function modelCategory(m: Model): ModelCategory {
   // job API, so bucketing it as "image" would put it in the wrong tab.
   if (c?.video_generation) return "video";
   if (c?.image_generation || c?.image_to_image) return "image";
+  // Before tts: music and separation models are audio.cpp models like the
+  // speech ones, but answer only on /v1/music/* and /v1/audio/separations.
+  if (c?.music_generation || c?.music_edit || c?.audio_separation) return "music";
   if (c?.audio_speech) return "tts";
   if (c?.audio_transcriptions) return "transcribe";
   // Before embeddings and the llm fallback: a decision model is a llama-server model
@@ -127,6 +131,7 @@ const PLAYGROUND_TABS: Partial<Record<ModelCategory, { tab: string; label: strin
   video: { tab: "video", label: "Generate" },
   "3d": { tab: "3d", label: "Generate" },
   tts: { tab: "speech", label: "Speak" },
+  music: { tab: "music", label: "Compose" },
   transcribe: { tab: "audio", label: "Transcribe" },
   decision: { tab: "decision", label: "Decide" },
 };

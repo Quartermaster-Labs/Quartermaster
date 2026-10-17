@@ -256,6 +256,12 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 		shared.SendResponse(w, r, http.StatusInternalServerError, "reading gguf metadata failed: "+err.Error())
 		return
 	}
+	// An audio.cpp gguf has no transformer hyperparameters (block_count 0), so the
+	// llama sizer would 500 on it the same way it does on a package directory.
+	if autogen.IsAudioCppModel(meta) {
+		shared.SendResponse(w, r, http.StatusBadRequest, "this model has no gguf payload to size")
+		return
+	}
 	q := r.URL.Query()
 	// actual=true: seed from the loaded command, for surfaces that describe what is
 	// loaded RIGHT NOW (the dashboard's VRAM band, stores/vram.ts). Prefer the

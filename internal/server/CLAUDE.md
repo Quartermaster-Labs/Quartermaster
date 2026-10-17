@@ -95,6 +95,22 @@ Also here: `turns_design.md` — the turn runner's design notes.
   removed the Clone and delete buttons). And listing voices no longer loads the model, which is
   surfaced as the `voice_list_offline` capability so the playground stops waiting for a running
   model before it refreshes.
+- **`/v1/tasks/run` is never exposed; the music routes are its only door** (`musicapi.go`).
+  audio.cpp's task body takes FILE PATHS (`request.audio`, and options such as `noise_file`,
+  `source_audio`), opened relative to the binary's directory. Proxied raw, that is an arbitrary
+  file read on the server. The typed routes take audio INLINE only (base64 or multipart),
+  validate it as WAV, write it to `<CacheDir>/audiocpp-tmp/in-<random>.wav` (0600, removed after
+  the request, anything older than an hour swept), and pass audio.cpp an absolute path it built
+  itself. Options go through a per-family whitelist (`musicFamilyOptions`) that names no path
+  option; an unknown key is a 400. YuE2 takes its prompt as the `style` option and reads lyrics
+  from the task's `text` when the `lyrics` option is absent, so the route always sends `lyrics`
+  (empty = no lyrics, which is NOT instrumental: YuE2 has no such mode and may still sing) or it
+  would sing the style tags; it also 400s a `duration`. The seed
+  is always sent explicitly (a random u32 when the caller gave none) and echoed in `X-Seed`, so
+  every result is reproducible. Input passes through
+  byte for byte unless the family has a hard rate (HTDemucs: 44.1 kHz, `musicFamilyInputRate`),
+  which is the only case `musicwav.go` resamples; ACE-Step resamples its own input, and re-encoding
+  it here would make an edit differ from the CLI fed the same file.
 - **The config editor is `-generate`-only** — every handler 501s when `s.autogen == nil`.
 
 ## Connections

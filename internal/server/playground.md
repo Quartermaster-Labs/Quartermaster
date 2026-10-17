@@ -10,11 +10,19 @@ runner** behind it. The tools' own fetch paths are in [`tools.md`](tools.md); th
 `users.json`), server-backed chat history + prefs, and `/api/mode` so **one bundle serves dashboard
 or playground per port**.
 
-**Storage** is per-user `DataDir/users/<user>/{chats,imagechats,speechchats,prefs}.json`. Generated
+**Storage** is per-user `DataDir/users/<user>/{chats,imagechats,videochats,speechchats,musicchats,prefs}.json`. Generated
 media (inline `data:` base64) is split out on write into `media/<hash>.<ext>` (`extractMedia`, a
 regex over raw bytes — structure-agnostic, byte-preserves numbers/timestamps, dedups by content
 hash) and served via `GET /api/media/{file...}` (per-user, Range-capable). Boot-time `Migrate()`
 folds the old flat inline-base64 layout into this.
+
+`musicchats.json` never holds inline audio. A song is tens of MB and every history store PUTs its
+whole list, so a thread of inline takes would hit `maxBlobBytes` after a handful. The Music tab
+uploads each result first (`POST /api/media`, `handlePlaygroundMediaUpload`: audio or image
+content types only, 256 MB cap, named by content hash, so a re-upload is a no-op) and the thread
+carries only the returned `/api/media/...` ref. That opens a window where a file exists but no
+JSON names it yet, so `gcMedia` skips anything younger than `mediaGCGrace` (10 min), and a
+re-upload of an existing file touches its mtime to restart the clock.
 
 Playground requests are exempt from `adminChain` (own port + login) — see
 [`http-core.md`](http-core.md).
