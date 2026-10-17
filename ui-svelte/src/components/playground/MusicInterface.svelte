@@ -751,7 +751,7 @@
             <div class="flex flex-col gap-1.5">
               <div class="flex items-center gap-2">
                 <span class={labelCls}>Lyrics</span>
-                <span class="ml-auto text-micro text-txtsecondary">{isMiniMax ? "required" : "empty = instrumental"}</span>
+                <span class="ml-auto text-micro text-txtsecondary">{isMiniMax ? "required" : isYue ? "empty = no lyrics, may still sing" : "empty = instrumental"}</span>
               </div>
               <textarea
                 bind:value={$lyricsStore}

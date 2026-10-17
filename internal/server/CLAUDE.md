@@ -104,7 +104,8 @@ Also here: `turns_design.md` — the turn runner's design notes.
   itself. Options go through a per-family whitelist (`musicFamilyOptions`) that names no path
   option; an unknown key is a 400. YuE2 takes its prompt as the `style` option and reads lyrics
   from the task's `text` when the `lyrics` option is absent, so the route always sends `lyrics`
-  (empty = instrumental) or it would sing the style tags; it also 400s a `duration`. The seed
+  (empty = no lyrics, which is NOT instrumental: YuE2 has no such mode and may still sing) or it
+  would sing the style tags; it also 400s a `duration`. The seed
   is always sent explicitly (a random u32 when the caller gave none) and echoed in `X-Seed`, so
   every result is reproducible. Input passes through
   byte for byte unless the family has a hard rate (HTDemucs: 44.1 kHz, `musicFamilyInputRate`),

@@ -473,7 +473,10 @@ func buildMusicUpstream(route musicRoute, family string, req musicRequest) (uint
 		if family == "yue2" {
 			// YuE2 takes its prompt as the style option, and reads lyrics from the
 			// text input when the lyrics option is absent, which would sing the
-			// style tags. An empty lyrics option is its instrumental request.
+			// style tags. An empty lyrics option only leaves the prompt's [Lyrics]
+			// section empty: YuE2 has no instrumental mode, and the base model is a
+			// vocal model that can still sing made-up words. Upstream's route to
+			// instrumentals is a separate AR LoRA (cot=full, "[instrumental]").
 			opts["style"] = req.Prompt
 			if req.Lyrics == nil {
 				opts["lyrics"] = ""
