@@ -162,7 +162,8 @@ func (s *FIFO) ApplyConfig(conf config.Config, planner Swapper) {
 //
 //  3. Fast path — the target process is already ready, the planner sees
 //     nothing to evict, and no in-flight swap is evicting it. Hand back its
-//     ServeHTTP immediately.
+//     ServeHTTP immediately. If the model is already at its concurrency
+//     limit, park in the queue instead; a freed slot drains it.
 //
 //  4. Would collide with an in-flight swap (we'd stop their target, or they're
 //     stopping us) — park in the queue for OnSwapDone to drain.
@@ -197,6 +198,11 @@ func (s *FIFO) OnRequest(req HandlerReq) {
 
 	// (3) Fast path: ready, nothing to evict, and nobody is evicting us.
 	if state == process.StateReady && len(evict) == 0 && !collidesWith(req.Model, evict, s.active) {
+		if s.atLimit(req.Model) {
+			s.logger.Debugf("%s: queuing request for model %s (at its concurrency limit)", s.name, req.Model)
+			s.enqueue(req)
+			return
+		}
 		s.logger.Debugf("%s: fast-path serving model %s (already ready)", s.name, req.Model)
 		s.grantHandler(req, req.Model)
 		return
@@ -406,9 +412,12 @@ func (s *FIFO) OnSwapDone(ev SwapDone) {
 	}
 
 	for _, w := range sw.waiters {
-		if ev.Err != nil {
+		switch {
+		case ev.Err != nil:
 			s.effects.GrantError(w, ev.Err)
-		} else {
+		case s.atLimit(ev.ModelID):
+			s.enqueue(w)
+		default:
 			s.grantHandler(w, ev.ModelID)
 		}
 	}
@@ -455,20 +464,24 @@ func (s *FIFO) OnLease(ev LeaseEvent) {
 // releaseInFlight drops one in-flight count and, when that was the last one,
 // arms the idle-grace hold and retries the queue: requests whose swap was
 // deferred because they would have evicted this (now-idle) process can proceed.
+// Short of the last one it still retries, because a slot just opened under the
+// model's concurrency limit and a request may be queued for exactly that.
 func (s *FIFO) releaseInFlight(modelID string) {
 	s.inFlight[modelID]--
-	if s.inFlight[modelID] <= 0 {
-		delete(s.inFlight, modelID)
-		// Going idle is the moment an agent loop is mid-tool-call, and the
-		// moment the scheduler used to hand the GPU away. Protect the model for
-		// one window, then drain anyway: a queued request that is out of
-		// patience still goes now, one that is not waits for the Wake.
-		if w := s.holdFor[modelID]; w > 0 {
-			s.hold[modelID] = time.Now().Add(w)
-			s.effects.Wake(w)
-		}
+	if s.inFlight[modelID] > 0 {
 		s.drainQueue()
+		return
 	}
+	delete(s.inFlight, modelID)
+	// Going idle is the moment an agent loop is mid-tool-call, and the
+	// moment the scheduler used to hand the GPU away. Protect the model for
+	// one window, then drain anyway: a queued request that is out of
+	// patience still goes now, one that is not waits for the Wake.
+	if w := s.holdFor[modelID]; w > 0 {
+		s.hold[modelID] = time.Now().Add(w)
+		s.effects.Wake(w)
+	}
+	s.drainQueue()
 }
 
 // OnWake re-examines the queue after a hold window or a waiter's patience has
@@ -546,14 +559,8 @@ func (s *FIFO) OnShutdown(err error) {
 // grantHandler hands the caller a tracked handler for modelID and, only if the
 // caller was still there to receive it, bumps the in-flight count. Incrementing
 // when the grant failed would strand the counter and block future evictions.
-// Requests that would exceed the model's concurrency limit are rejected with a
-// shared.NewConcurrencyLimitError (HTTP 429 with Retry-After).
+// Callers check atLimit first and queue instead of calling this.
 func (s *FIFO) grantHandler(req HandlerReq, modelID string) {
-	if s.inFlight[modelID] >= s.limit(modelID) {
-		s.effects.GrantError(req, shared.ConcurrencyLimitError{})
-		return
-	}
-
 	if err := shared.SetReqData(req.Ctx, "fifo_priority", strconv.Itoa(s.cfg.Priority[req.Model])); err != nil {
 		s.logger.Debugf("failed to set fifo_priority metadata: %v", err)
 	}
@@ -574,6 +581,16 @@ func (s *FIFO) grantHandler(req HandlerReq, modelID string) {
 func (s *FIFO) touch(modelID string) {
 	s.useTick++
 	s.lastUse[modelID] = s.useTick
+}
+
+// atLimit reports whether modelID already has as many requests in flight as its
+// concurrency limit allows. A request over the limit is QUEUED, not refused:
+// the limit exists because the upstream serves one job at a time (audio.cpp,
+// concurrencyLimit 1) or a fixed number of slots, and a 429 there only tells a
+// client to retry in a loop for a slot the queue would have handed it anyway.
+// The wait is bounded by the client: a disconnect prunes it via OnCancel.
+func (s *FIFO) atLimit(modelID string) bool {
+	return s.inFlight[modelID] >= s.limit(modelID)
 }
 
 // limit returns the per-model concurrency cap, defaulting to
@@ -644,6 +661,10 @@ func (s *FIFO) drainQueue() {
 		running := s.runningSet(req.Model)
 		evict := s.planner.EvictionFor(req.Model, running)
 		if state == process.StateReady && len(evict) == 0 && !collidesWith(req.Model, evict, s.active) {
+			if s.atLimit(req.Model) {
+				remaining = append(remaining, req)
+				continue
+			}
 			s.logger.Debugf("%s: queued request for model %s now served fast-path", s.name, req.Model)
 			notifyPosition(req, 0)
 			s.grantHandler(req, req.Model)
