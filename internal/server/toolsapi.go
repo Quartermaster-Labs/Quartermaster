@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -231,3 +232,43 @@ func firstNonZero(vals ...int) int {
 }
 
 func quote(s string) string { return `"` + s + `"` }
+
+// --- POST /v1/tools/media/audio --------------------------------------------
+
+// handleToolMediaAudio downloads a page's audio-only stream via yt-dlp, for the
+// music playground's References tab (separate it, or transcribe it to a score).
+// The audio comes back as served (m4a/webm), base64, never transcoded: there is
+// no ffmpeg here, and the browser decodes both. Capped at 15 min / 64 MB.
+func (s *Server) handleToolMediaAudio(w http.ResponseWriter, r *http.Request) {
+	var req toolYouTubeTarget
+	if !decodeToolBody(w, r, &req) {
+		return
+	}
+	target, ok := req.target(w)
+	if !ok {
+		return
+	}
+	if _, err := tools.ParseMediaTarget(r.Context(), target); err != nil {
+		toolError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	a, err := tools.FetchMediaAudio(r.Context(), target)
+	if err != nil {
+		if errors.Is(err, tools.ErrDlpMissing) {
+			toolError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		toolError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{
+		"title":    a.Title,
+		"uploader": a.Uploader,
+		"url":      a.URL,
+		"site":     a.Site,
+		"duration": a.Duration,
+		"format":   a.Ext,
+		"mime":     tools.MediaAudioMime(a.Ext),
+		"audio":    base64.StdEncoding.EncodeToString(a.Data),
+	})
+}

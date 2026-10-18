@@ -891,6 +891,7 @@ func (s *Server) routes() {
 	mux.Handle("POST /v1/music/generations", modelChain.ThenFunc(s.handleMusic(musicGenerate)))
 	mux.Handle("POST /v1/music/edits", modelChain.ThenFunc(s.handleMusic(musicEdit)))
 	mux.Handle("POST /v1/audio/separations", modelChain.ThenFunc(s.handleMusic(musicSeparate)))
+	mux.Handle("POST /v1/music/transcriptions", modelChain.ThenFunc(s.handleMusic(musicTranscribe)))
 
 	// quartermaster API + custom endpoints.
 	mux.Handle("GET /v1/models", discoveryChain.ThenFunc(s.handleListModels))
@@ -902,6 +903,7 @@ func (s *Server) routes() {
 	// as the inference routes (discoveryChain), data-plane responses.
 	mux.Handle("POST /v1/tools/search", discoveryChain.ThenFunc(s.handleToolSearch))
 	mux.Handle("POST /v1/tools/youtube/transcript", discoveryChain.ThenFunc(s.handleToolYouTubeTranscript))
+	mux.Handle("POST /v1/tools/media/audio", discoveryChain.ThenFunc(s.handleToolMediaAudio))
 	mux.Handle("POST /v1/tools/youtube/search", discoveryChain.ThenFunc(s.handleToolYouTubeSearch))
 	mux.Handle("POST /v1/tools/youtube/comments", discoveryChain.ThenFunc(s.handleToolYouTubeComments))
 	mux.Handle("GET /logs", adminChain.ThenFunc(s.handleLogs))

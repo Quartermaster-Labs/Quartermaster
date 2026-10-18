@@ -18,12 +18,14 @@ Everything is registered in `routes` (`server.go`). Model-dispatched routes (`mo
   it through form parsing's query fallback rather than a body field. TRELLIS.2 image-to-3D
   (`trellis2-server`); the generated GLB comes back from the upstream's `/output/<name>`.
 - **`GET`** — `/v1/audio/voices`, `/sdapi/v1/loras`.
-- **`POST /v1/music/generations`, `/v1/music/edits`, `/v1/audio/separations`** (`musicapi.go`):
+- **`POST /v1/music/generations`, `/v1/music/edits`, `/v1/audio/separations`, `/v1/music/transcriptions`** (`musicapi.go`):
   typed audio.cpp music routes, JSON or multipart. Rewritten onto audio.cpp's
   `POST /v1/tasks/run` and dispatched through the same `localPeerHandler`, so the one-big-model
   swap applies. Synchronous: the upstream proxy has no response-header timeout. Generations
   return `audio/wav` (or `b64_json`) with the seed in `X-Seed`; separations return
-  `{"stems":[{name, sample_rate, channels, audio}]}`. An edit whose source is too long for the
+  `{"stems":[{name, sample_rate, channels, audio}]}`; transcriptions (SheetSage2, task `midi`)
+  return `{"score": "<ABC text>", "format": "abc"}`, picked out of audio.cpp's artifacts by
+  `abcScore`. An edit whose source is too long for the
   backend's VAE encoder (audio.cpp's bare "VAE encoder backend buffer allocation failed" 500;
   about 24 s on AMD Vulkan's 2 GB buffer cap) comes back as a **400** naming the source length
   (`musicCapacityError`). No length limit is enforced: the cap is the driver's.
@@ -42,7 +44,7 @@ Auth-gated but **not** model-dispatched (`discoveryChain`):
   a tracked render. They carry a job id and nothing else, so they are routable only through the
   server-side `videoJobs` registry (job id → model id). The GET answers from the watcher's cached
   document, never from the upstream: the lease drops the instant a render completes, so the model
-  may already be evicted by the time the client's last poll arrives. `/v1/tools/youtube/transcript`, `/v1/tools/youtube/search`,
+  may already be evicted by the time the client's last poll arrives. `/v1/tools/youtube/transcript`, `/v1/tools/media/audio`, `/v1/tools/youtube/search`,
   `/v1/tools/youtube/comments` (`toolsapi.go`) — tool **execution** for external AI projects:
   the executors from `internal/tools`, same API-key credential as the inference routes, model-ready
   JSON responses, OpenAI-shaped errors. Stateless per call (provider config in the body).

@@ -64,6 +64,7 @@ const (
 	audioClsASR
 	audioClsMusic // task "gen", answered on /v1/music/*
 	audioClsSep   // task "sep", answered on /v1/audio/separations
+	audioClsMidi  // task "midi", answered on /v1/music/transcriptions
 )
 
 // audioCppFamilies maps audio.cpp's family id - the value its converter stamps
@@ -75,7 +76,7 @@ const (
 // codecs, alignment, diarization and speech-to-speech have no class, route or
 // UI here yet. Music and separation ARE served, but only for the families whose
 // request options the typed routes in internal/server/musicapi.go know
-// (ace_step, minimax_music3, yue2, htdemucs): each family reads a different option
+// (ace_step, minimax_music3, yue2, htdemucs, sheetsage2): each family reads a different option
 // set, and one the route has no whitelist for would 400 every request.
 //
 // A family MISSING from this table is one upstream added after the table was
@@ -162,7 +163,7 @@ var audioCppFamilies = map[string]int{
 	"sanotts":                 audioClsTTS,               // tts (community)
 	"seed_vc":                 0,                         // vc,svc (supported)
 	"sense_asr":               audioClsASR,               // asr (community)
-	"sheetsage2":              0,                         // midi (supported)
+	"sheetsage2":              audioClsMidi,              // midi (supported)
 	"soprano_tts":             audioClsTTS,               // tts (community)
 	"sopro_tts":               audioClsTTS,               // tts,clone (community)
 	"sortformer_diar":         0,                         // diar (supported)
@@ -364,6 +365,17 @@ var audioCppCompanions = map[string]audioCppCompanion{
 // a measured one.
 const audioCppMusicOverheadGB = 1.0
 
+// audioCppMidiOverheadGB is the pad for a score transcriber (SheetSage2): its
+// session reserves fixed arenas regardless of the song, weight_context_mb 1024
+// plus decoder_graph_arena_mb 1536 by default, on top of the encoder's own
+// working set. Upstream's defaults, not a measurement.
+const audioCppMidiOverheadGB = 2.75
+
+// audioCppTranscribeFormat is the score notation a "midi" family returns, as
+// emitted in the musicTranscribe capability. SheetSage2 is the only one, and
+// it writes ABC.
+const audioCppTranscribeFormat = "abc"
+
 // audioCppOverheadGB pads a family's weights into a VRAM admission estimate: the
 // session buffers, the vocoder or audio tokenizer that loads alongside the model
 // and the runtime's own context. A flat pad, for the same reason qwentts gets
@@ -385,8 +397,8 @@ func IsAudioCppModel(meta Metadata) bool {
 // dual-task family: the config entry names a single task, so advertising
 // transcription on a process configured for speech would route requests at a
 // route it was not set up to answer. TTS wins the tie, which is what the
-// dual-task families are primarily published as. Music is "gen" and separation
-// "sep", audio.cpp's own task names. Returns "" for a family with no class here
+// dual-task families are primarily published as. Music is "gen", separation
+// "sep" and score transcription "midi", audio.cpp's own task names. Returns "" for a family with no class here
 // (voice conversion et al) and for one the table does not know.
 func audioCppTask(family string) string {
 	switch cls := audioCppFamilies[strings.ToLower(strings.TrimSpace(family))]; {
@@ -398,6 +410,8 @@ func audioCppTask(family string) string {
 		return "gen"
 	case cls&audioClsSep != 0:
 		return "sep"
+	case cls&audioClsMidi != 0:
+		return "midi"
 	}
 	return ""
 }
@@ -616,8 +630,11 @@ func emitAudioCppModel(b *strings.Builder, s Settings, row GgufRow, ov *Override
 		return
 	}
 	overhead := audioCppOverheadGB
-	if task == "gen" {
+	switch task {
+	case "gen":
 		overhead = audioCppMusicOverheadGB
+	case "midi":
+		overhead = audioCppMidiOverheadGB
 	}
 	if c, ok := audioCppCompanions[family]; ok {
 		emitAudioCppCompanionModel(b, s, row, ov, name, family, task, c, overhead, emitted)
@@ -715,6 +732,8 @@ func writeAudioCppEntry(b *strings.Builder, s Settings, row GgufRow, ov *Overrid
 		}
 	case "sep":
 		b.WriteString("      separation: true\n")
+	case "midi":
+		fmt.Fprintf(b, "      musicTranscribe: %s\n", audioCppTranscribeFormat)
 	default:
 		b.WriteString("      in: [text]\n")
 		b.WriteString("      out: [audio]\n")

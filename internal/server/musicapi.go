@@ -60,6 +60,7 @@ const (
 	musicGenerate musicRoute = iota
 	musicEdit
 	musicSeparate
+	musicTranscribe
 )
 
 const (
@@ -103,6 +104,7 @@ var musicFamilyOptions = map[string]map[string]bool{
 		"repaint_injection_ratio", "complete_track_classes", "track_name",
 	),
 	"minimax_music3": setOf("ar_guidance_scale", "top_k"),
+	"sheetsage2":     setOf("max_tokens"),
 	"yue2": setOf(
 		"cot", "semantic_prefix",
 		"abc_temperature", "abc_top_p", "abc_top_k", "abc_repetition_penalty",
@@ -321,6 +323,10 @@ func musicRouteMismatch(route musicRoute, family, task string) string {
 		if task != "sep" {
 			return "is not a source separation model"
 		}
+	case musicTranscribe:
+		if task != "midi" {
+			return "is not a score transcription model"
+		}
 	}
 	return ""
 }
@@ -487,8 +493,11 @@ func buildMusicUpstream(route musicRoute, family string, req musicRequest) (uint
 		return 0, nil, nil, musicError("response_format must be wav or b64_json")
 	}
 
+	// Separation and transcription read a recording and nothing else: no
+	// prompt, no seed (neither samples), no text input.
+	takesPrompt := route == musicGenerate || route == musicEdit
 	var seed uint64
-	if route != musicSeparate {
+	if takesPrompt {
 		if strings.TrimSpace(req.Prompt) == "" {
 			return 0, nil, nil, musicError("prompt is required")
 		}
@@ -577,7 +586,7 @@ func buildMusicUpstream(route musicRoute, family string, req musicRequest) (uint
 	}
 
 	inner := map[string]any{"options": opts}
-	if route != musicSeparate {
+	if takesPrompt {
 		inner["text"] = req.Prompt
 		if req.Language != "" {
 			inner["language"] = req.Language
@@ -585,7 +594,7 @@ func buildMusicUpstream(route musicRoute, family string, req musicRequest) (uint
 	}
 
 	var cleanup func()
-	if route == musicEdit || route == musicSeparate {
+	if !takesPrompt || route == musicEdit {
 		if len(req.audioBytes) == 0 {
 			return 0, nil, nil, musicError("audio is required (base64 WAV in \"audio\", or a multipart file)")
 		}
@@ -728,6 +737,49 @@ type audioCppTaskResult struct {
 		SampleRate int    `json:"sample_rate"`
 		Channels   int    `json:"channels"`
 	} `json:"named_audio_outputs"`
+	Artifacts []audioCppArtifact `json:"artifacts"`
+}
+
+// audioCppArtifact is a non-audio task output: SheetSage2 writes its score as
+// one (payload = base64 of the ABC text) next to an events-JSON one.
+type audioCppArtifact struct {
+	ID      string            `json:"id"`
+	Kind    string            `json:"kind"`
+	Payload string            `json:"payload"`
+	Meta    map[string]string `json:"meta"`
+}
+
+// abcScore picks the ABC score out of a transcription's artifacts: the one
+// whose meta names ABC (a mime such as text/vnd.abc), else the first whose
+// text reads as ABC (an X: reference line and a K: key line). Returns "" when
+// none does.
+func abcScore(arts []audioCppArtifact) string {
+	text := func(a audioCppArtifact) string {
+		b, err := base64.StdEncoding.DecodeString(a.Payload)
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	}
+	looksABC := func(s string) bool {
+		s = "\n" + strings.ReplaceAll(s, "\r", "")
+		return strings.Contains(s, "\nX:") && strings.Contains(s, "\nK:")
+	}
+	for _, a := range arts {
+		for _, v := range a.Meta {
+			if strings.Contains(strings.ToLower(v), "abc") && !strings.Contains(strings.ToLower(v), "json") {
+				if t := text(a); t != "" {
+					return t
+				}
+			}
+		}
+	}
+	for _, a := range arts {
+		if t := text(a); looksABC(t) {
+			return t
+		}
+	}
+	return ""
 }
 
 type musicStem struct {
@@ -742,6 +794,15 @@ func writeMusicResponse(w http.ResponseWriter, r *http.Request, route musicRoute
 	var res audioCppTaskResult
 	if err := json.Unmarshal(upstream, &res); err != nil {
 		shared.SendResponse(w, r, http.StatusBadGateway, "upstream returned an unreadable result")
+		return
+	}
+	if route == musicTranscribe {
+		score := abcScore(res.Artifacts)
+		if score == "" {
+			shared.SendResponse(w, r, http.StatusBadGateway, "upstream returned no ABC score")
+			return
+		}
+		writeJSON(w, map[string]any{"score": score, "format": "abc"})
 		return
 	}
 	if route == musicSeparate {

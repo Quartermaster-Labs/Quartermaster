@@ -190,6 +190,12 @@ context as-is.
 | `POST /v1/tools/youtube/transcript` | `{url|video|id|link, lang?}` | the `Transcript` object |
 | `POST /v1/tools/youtube/search` | `{query|q?, channel|handle?, tab?, limit|count?}` — one of query/channel required | `{videos: []Video}` |
 | `POST /v1/tools/youtube/comments` | `{url|video|id|link, limit|count?}` | `{video, comments: []Comment}` |
+| `POST /v1/tools/media/audio` | `{url|video|id|link}` | `{title, uploader, url, site, duration, format, mime, audio}` (base64, as served: m4a or webm) |
+
+`/v1/tools/media/audio` (`internal/tools/mediaaudio.go`) feeds the music playground's References
+tab. Same `ParseMediaTarget` gate as the transcript, but it DOWNLOADS: bestaudio, no conversion
+(that would need ffmpeg; the browser decodes both containers), capped at 15 min and 64 MB.
+`ErrDlpMissing` is a 503, a refused target a 400, any other yt-dlp failure a 502.
 
 Conventions that matter:
 

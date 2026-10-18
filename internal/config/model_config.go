@@ -56,6 +56,10 @@ type ModelCapConfig struct {
 	// on ("abc" for YuE2); empty = none. Sent as the generation route's typed
 	// `score` field.
 	MusicScore string `yaml:"musicScore"`
+	// MusicTranscribe names the score notation a transcriber writes from a
+	// recording ("abc" for SheetSage2); empty = not a transcriber. Answered on
+	// /v1/music/transcriptions.
+	MusicTranscribe string `yaml:"musicTranscribe"`
 	// ReasoningEffort lists the reasoning-effort levels this model's chat
 	// template accepts (Qwen 3.8: xhigh/medium/low), lowest-cost value LAST as
 	// the template declares them. Non-empty is the signal that an incoming
@@ -69,7 +73,7 @@ type ModelCapConfig struct {
 
 // Empty returns true when all fields are at their zero values.
 func (c ModelCapConfig) Empty() bool {
-	return len(c.In) == 0 && len(c.Out) == 0 && !c.Tools && !c.Reranker && !c.Embedding && !c.Segmentation && !c.Decision && c.DecisionType == "" && !c.VoiceClone && !c.Music && !c.MusicEdit && !c.Separation && c.MusicScore == "" && len(c.ReasoningEffort) == 0 && c.Context == 0
+	return len(c.In) == 0 && len(c.Out) == 0 && !c.Tools && !c.Reranker && !c.Embedding && !c.Segmentation && !c.Decision && c.DecisionType == "" && !c.VoiceClone && !c.Music && !c.MusicEdit && !c.Separation && c.MusicScore == "" && c.MusicTranscribe == "" && len(c.ReasoningEffort) == 0 && c.Context == 0
 }
 
 // Validate checks that all modality values are recognized and context is
@@ -222,7 +226,8 @@ type AudioCppConfig struct {
 	// Path is the gguf (or model directory) the server loads.
 	Path string `yaml:"path"`
 	// Task selects which surface this process serves: "tts", "asr", "gen"
-	// (music generation) or "sep" (source separation). Blank lets audio.cpp
+	// (music generation), "sep" (source separation) or "midi" (score
+	// transcription). Blank lets audio.cpp
 	// apply its own default ("tts").
 	Task string `yaml:"task"`
 	// SessionOptions are audio.cpp's per-model session_options, passed through

@@ -50,6 +50,7 @@ func TestAudioCppTask(t *testing.T) {
 		"firered_audio": "tts", // dual-task: one config entry, tts wins
 		"ace_step":      "gen", // music
 		"htdemucs":      "sep", // separation
+		"sheetsage2":    "midi", // score transcription
 		"seed_vc":       "",    // voice conversion
 		"not_a_family":  "",
 	}
@@ -590,5 +591,28 @@ func TestEmitAudioCppModel_Yue2Companion(t *testing.T) {
 	}
 	if want := []string{"yue2-3b-q8_0"}; !reflect.DeepEqual(emitted, want) {
 		t.Fatalf("emitted = %v, want %v", emitted, want)
+	}
+}
+
+func TestEmitAudioCppModel_Transcription(t *testing.T) {
+	s := audioCppSettings("vulkan")
+	row := audioCppRow("/models/music/sheetsage2-orig.gguf")
+	meta := Metadata{Architecture: "audiocpp", AudioFamily: "sheetsage2"}
+
+	var b strings.Builder
+	var emitted []string
+	emitAudioCppModel(&b, s, row, &Override{}, "sheetsage2-orig", meta, &emitted)
+	out := b.String()
+
+	if !strings.Contains(out, `task: "midi"`) || !strings.Contains(out, "musicTranscribe: abc") {
+		t.Errorf("transcription entry missing task/capability:\n%s", out)
+	}
+	for _, bad := range []string{"music: true", "separation: true", "in: ["} {
+		if strings.Contains(out, bad) {
+			t.Errorf("transcription entry carries %q:\n%s", bad, out)
+		}
+	}
+	if len(emitted) != 1 {
+		t.Fatalf("emitted = %v, want 1 entry", emitted)
 	}
 }

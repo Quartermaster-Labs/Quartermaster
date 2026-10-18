@@ -109,7 +109,9 @@ Also here: `turns_design.md` — the turn runner's design notes.
   field, INLINE text only (64 KiB cap, generation only), mapped onto the family's own option by
   `autogen.AudioCppMusicScore`; the option itself (`abc`) is off the whitelist so there is one
   door, and a score with the family's skip mode (`cot=off`) is a 400 rather than silently dropped.
-  `abc_file` stays excluded: it is a path. The seed
+  `abc_file` stays excluded: it is a path. `/v1/music/transcriptions` is the reverse direction
+  (SheetSage2, task `midi`): audio in, the ABC artifact out as `{score, format}`, and it sends no
+  prompt, seed or text, only staged audio and `max_tokens`. The seed
   is always sent explicitly (a random u32 when the caller gave none) and echoed in `X-Seed`, so
   every result is reproducible. Input passes through
   byte for byte unless the family has a hard rate (HTDemucs: 44.1 kHz, `musicFamilyInputRate`),

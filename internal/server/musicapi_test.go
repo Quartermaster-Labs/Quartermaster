@@ -116,6 +116,9 @@ func TestMusicRouteMismatch(t *testing.T) {
 		{musicEdit, "minimax_music3", "gen", false},
 		{musicSeparate, "htdemucs", "sep", true},
 		{musicSeparate, "ace_step", "gen", false},
+		{musicTranscribe, "sheetsage2", "midi", true},
+		{musicTranscribe, "htdemucs", "sep", false},
+		{musicGenerate, "sheetsage2", "midi", false},
 	}
 	for _, c := range cases {
 		if got := musicRouteMismatch(c.route, c.family, c.task) == ""; got != c.ok {
@@ -420,5 +423,73 @@ func TestMusicCapacityError(t *testing.T) {
 	msg, ok = musicCapacityError(musicEdit, []byte("ACE-Step VAE encoder backend buffer allocation failed"), []byte("junk"))
 	if !ok || strings.Contains(msg, "This source is") {
 		t.Errorf("plain-text body: ok=%v msg=%s", ok, msg)
+	}
+}
+
+func TestBuildMusicUpstream_TranscribeStagesAudioOnly(t *testing.T) {
+	withMusicTmp(t)
+	_, body, cleanup, err := buildMusicUpstream(musicTranscribe, "sheetsage2", musicRequest{
+		Model: "sheetsage2", Options: map[string]any{"max_tokens": 4096.0},
+		audioBytes: pcm16WAV(make([]int16, 4800), 1, 48000),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	_, req, opts := upstreamDoc(t, body)
+	if _, has := opts["seed"]; has {
+		t.Error("a transcription sent a seed")
+	}
+	if _, has := req["text"]; has {
+		t.Error("a transcription sent text")
+	}
+	if opts["max_tokens"] != "4096" {
+		t.Errorf("max_tokens = %q", opts["max_tokens"])
+	}
+	if _, err := os.Stat(req["audio"].(string)); err != nil {
+		t.Errorf("audio not staged: %v", err)
+	}
+
+	if _, _, _, err := buildMusicUpstream(musicTranscribe, "sheetsage2", musicRequest{Model: "m"}); err == nil {
+		t.Error("a transcription without audio was accepted")
+	}
+	if _, _, _, err := buildMusicUpstream(musicTranscribe, "sheetsage2", musicRequest{
+		Model: "m", Options: map[string]any{"abc_file": "/etc/passwd"}, audioBytes: pcm16WAV(make([]int16, 10), 1, 48000),
+	}); err == nil {
+		t.Error("a path option was accepted")
+	}
+}
+
+func TestWriteMusicResponse_Transcribe(t *testing.T) {
+	abc := `X:1
+T:Song
+M:4/4
+K:C
+CDEF|`
+	enc := base64.StdEncoding.EncodeToString
+	for name, arts := range map[string][]map[string]any{
+		"by meta": {
+			{"id": "events", "kind": "midi", "payload": enc([]byte(`{"x":1}`)), "meta": map[string]string{"mime": "application/json"}},
+			{"id": "score", "kind": "midi", "payload": enc([]byte(abc)), "meta": map[string]string{"mime": "text/vnd.abc"}},
+		},
+		"by content": {
+			{"id": "events", "kind": "midi", "payload": enc([]byte(`{"x":1}`))},
+			{"id": "out", "kind": "midi", "payload": enc([]byte(abc))},
+		},
+	} {
+		up, _ := json.Marshal(map[string]any{"artifacts": arts})
+		rec := httptest.NewRecorder()
+		writeMusicResponse(rec, httptest.NewRequest(http.MethodPost, "/", nil), musicTranscribe, "", 0, up)
+		var j struct{ Score, Format string }
+		if err := json.Unmarshal(rec.Body.Bytes(), &j); err != nil || j.Score != abc || j.Format != "abc" {
+			t.Errorf("%s: reply %d %s (err %v)", name, rec.Code, rec.Body.String(), err)
+		}
+	}
+
+	up, _ := json.Marshal(map[string]any{"artifacts": []map[string]any{{"id": "events", "payload": enc([]byte("{}"))}}})
+	rec := httptest.NewRecorder()
+	writeMusicResponse(rec, httptest.NewRequest(http.MethodPost, "/", nil), musicTranscribe, "", 0, up)
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("no ABC artifact: status %d, want 502", rec.Code)
 	}
 }

@@ -76,7 +76,7 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 	}
 
 	// Build capabilities map only if there's something to put in it.
-	if hasIn || hasOut || caps.Tools || caps.Reranker || caps.Embedding || caps.Decision || caps.Segmentation || caps.VoiceClone || caps.Music || caps.MusicEdit || caps.MusicScore != "" || caps.Separation || len(caps.ReasoningEffort) > 0 {
+	if hasIn || hasOut || caps.Tools || caps.Reranker || caps.Embedding || caps.Decision || caps.Segmentation || caps.VoiceClone || caps.Music || caps.MusicEdit || caps.MusicScore != "" || caps.MusicTranscribe != "" || caps.Separation || len(caps.ReasoningEffort) > 0 {
 		capsMap = make(map[string]any)
 	}
 
@@ -150,6 +150,9 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 	}
 	if caps.Separation {
 		capsMap["audio_separation"] = true
+	}
+	if caps.MusicTranscribe != "" {
+		capsMap["music_transcription"] = caps.MusicTranscribe
 	}
 
 	// decision_type names the head (kev, laya, lfm2-d1, ...): what it accepts

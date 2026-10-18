@@ -315,7 +315,7 @@ the server reads it out of the same file for itself).
 **deliberately dropped with a comment instead of an entry**, since no other engine here could
 serve it either: no family id in the header (a third-party `-orig` conversion that dropped the
 spec - we warn rather than guess), a known family we do not serve yet (voice conversion, codec,
-align, diar, midi, s2s, and music families other than the two below), and an unknown family (upstream added one; the table
+align, diar, s2s, and music families other than the ones below), and an unknown family (upstream added one; the table
 needs a row).
 
 ### It must never become a second scheduler
@@ -396,7 +396,7 @@ zero row and the emitter fell to its "no audio.cpp backend registered" path: a b
 offering the mismatch in the first place (`modelConfigResp.IsAudioCpp`, filled from the presence
 of the generated `audiocpp:` block), but the resolver does not rely on the client for that.
 
-### Music and separation (`gen` / `sep`)
+### Music, separation and transcription (`gen` / `sep` / `midi`)
 
 `ace_step`, `minimax_music3` and `yue2` are task `gen` (capability `music`, plus `musicEdit` for
 ace_step, the only one with repaint/complete/cover), `htdemucs` is task `sep` (capability
@@ -413,6 +413,11 @@ recognizes, and adding a family is one row.
 
 A music generator is charged `audioCppMusicOverheadGB` (1 GB, an estimate: a song's latents and
 activations are larger than a sentence's) instead of the speech overhead.
+
+`sheetsage2` is task `midi` (`audioClsMidi`, capability `musicTranscribe: abc`): audio in, an ABC
+score out, served by `/v1/music/transcriptions`. Its overhead is `audioCppMidiOverheadGB`
+(2.75 GB, unmeasured: the model's own session arenas are 1 GB of weight context plus 1.5 GB of
+decoder graph). Upstream tags it `gguf, cuda`, so a Vulkan build is untested.
 
 **ACE-Step always gets `ace_step.mem_saver: "true"`** (`audioCppFamilySessionOptions`). Without
 it a render that follows a LONGER one in the same process differs from the same seed rendered
