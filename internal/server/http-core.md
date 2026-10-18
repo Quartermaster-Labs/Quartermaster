@@ -264,5 +264,11 @@ so the stable prefix stays byte-identical turn to turn, giving KV reuse for ANY 
 than only slotcache participants. Date granularity is kept, and it is idempotent. `GET /api/canon`
 is the snapshot for Observe → Context.
 
+It sits on the model chain, so it also sees every music and image upload. It reads the body through
+`peekBody` (`peekbody.go`, 32 MB), which leaves the WHOLE body in place and reports whether it saw
+all of it; a larger body passes through untouched. The slot cache's `sessionAnchor` and `pinSlot`
+use the same helper. Restoring only the peeked prefix, as all three once did, cut a full song's
+base64 off at 32 MB and failed it as "unexpected end of JSON input".
+
 Not the same as the slotcache's own `normalizeTimestamps`, which is scoped to participating models'
 anchoring — see [`slotcache.md`](slotcache.md).

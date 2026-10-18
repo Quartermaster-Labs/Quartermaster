@@ -225,8 +225,10 @@ func pinSlot(r *http.Request, idx int) {
 	if r.Body == nil {
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
-	if err != nil {
+	// Rewriting a prefix would drop the rest of the body, so an oversized one
+	// goes through unpinned.
+	body, complete, err := peekBody(r, maxPeekBytes)
+	if err != nil || !complete {
 		return
 	}
 	nb, err := sjson.SetBytes(body, "id_slot", idx)

@@ -69,11 +69,10 @@ func sessionAnchor(r *http.Request) (key string, preamble string, ok bool) {
 	if r.Body == nil {
 		return "", "", false
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
-	if err != nil {
+	body, complete, err := peekBody(r, maxPeekBytes)
+	if err != nil || !complete {
 		return "", "", false
 	}
-	r.Body = io.NopCloser(bytes.NewReader(body)) // restore for the next handler
 
 	msgs := gjson.GetBytes(body, "messages")
 	if !msgs.IsArray() {
