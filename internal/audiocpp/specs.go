@@ -30,13 +30,36 @@ import (
 const DirName = "model_specs"
 
 // SpecsDir is the catalog directory for an installed audio.cpp executable.
+//
+// A release ships it beside the binary. A source build does not: the server
+// compiles its specs in, and the JSON stays at the checkout root, three levels
+// above build/<preset>/bin. So the nearest ancestor holding one wins, and with
+// none the beside-the-binary path is returned for the error to name.
 func SpecsDir(exe string) string {
 	exe = strings.TrimSpace(exe)
 	if exe == "" {
 		return ""
 	}
-	return filepath.Join(filepath.Dir(exe), DirName)
+	beside := filepath.Join(filepath.Dir(exe), DirName)
+	dir := filepath.Dir(exe)
+	for i := 0; i <= specsSearchDepth; i++ {
+		cand := filepath.Join(dir, DirName)
+		if fi, err := os.Stat(cand); err == nil && fi.IsDir() {
+			return cand
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return beside
 }
+
+// specsSearchDepth is how far above the binary SpecsDir looks: bin, the preset
+// folder, build/, and the checkout root. Deeper would start finding unrelated
+// folders.
+const specsSearchDepth = 3
 
 // Package is one downloadable set of files: a family at a precision.
 type Package struct {
