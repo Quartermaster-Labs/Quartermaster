@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tip } from "../../lib/tooltip";
-  import { Play, Pause, Volume2, VolumeX } from "lucide-svelte";
+  import { Play, Pause } from "lucide-svelte";
 
   // Custom audio clip player matching the playground design language (warm
   // palette, primary fill) — replaces the ugly native <audio controls>. Shows a
@@ -12,14 +12,9 @@
   // button into "open this take in the spotlight from here" instead of playing
   // in place, `startAt`/`autoplay` let the spotlight pick up where the card was,
   // and `ontime`/`ondecoded` feed the highlight its clock and its pause map.
-  //
-  // `onvolume` opts into an inline volume control. The parent owns the value and
-  // hands the same one to every player, so dragging one moves them all: that is
-  // what tells the user the volume is shared, which a lone header slider never did.
   let {
     src,
     volume = 1,
-    onvolume,
     label = "",
     wide = false,
     startAt = 0,
@@ -30,7 +25,6 @@
   }: {
     src: string;
     volume?: number;
-    onvolume?: (v: number) => void;
     label?: string;
     wide?: boolean;
     startAt?: number;
@@ -79,16 +73,6 @@
   }
 
   const frac = $derived(dur > 0 ? Math.min(1, cur / dur) : 0);
-
-  // Mute remembers the level it left, so unmuting is one click, not a drag.
-  let unmuteTo = $state(1);
-  function toggleMute() {
-    if (!onvolume) return;
-    if (volume > 0) {
-      unmuteTo = volume;
-      onvolume(0);
-    } else onvolume(unmuteTo > 0 ? unmuteTo : 1);
-  }
 
   // Keep the element's playback volume in sync with the composer setting.
   $effect(() => {
@@ -229,26 +213,4 @@
       <span>{fmt(dur)}</span>
     </div>
   </div>
-
-  {#if onvolume}
-    <div class="shrink-0 flex items-center gap-1 self-start h-7" use:tip={"Volume, shared by every player"}>
-      <button
-        class="grid place-items-center w-6 h-6 rounded text-txtsecondary hover:text-txtmain"
-        onclick={toggleMute}
-        aria-label={volume > 0 ? "Mute" : "Unmute"}
-      >
-        {#if volume > 0}<Volume2 class="w-3.5 h-3.5" />{:else}<VolumeX class="w-3.5 h-3.5" />{/if}
-      </button>
-      <input
-        type="range"
-        min="0"
-        max="1"
-        step="0.01"
-        value={volume}
-        oninput={(e) => onvolume(+(e.currentTarget as HTMLInputElement).value)}
-        class="w-16 accent-primary"
-        aria-label="Volume"
-      />
-    </div>
-  {/if}
 </div>
