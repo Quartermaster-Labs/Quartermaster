@@ -46,12 +46,12 @@ func TestAudioCppTask(t *testing.T) {
 		"moss_tts_nano": "tts",
 		"qwen3_asr":     "asr",
 		"nemotron_asr":  "asr",
-		"echo_tts":      "tts", // clone-only is still speech synthesis
-		"firered_audio": "tts", // dual-task: one config entry, tts wins
-		"ace_step":      "gen", // music
-		"htdemucs":      "sep", // separation
+		"echo_tts":      "tts",  // clone-only is still speech synthesis
+		"firered_audio": "tts",  // dual-task: one config entry, tts wins
+		"ace_step":      "gen",  // music
+		"htdemucs":      "sep",  // separation
 		"sheetsage2":    "midi", // score transcription
-		"seed_vc":       "",    // voice conversion
+		"seed_vc":       "",     // voice conversion
 		"not_a_family":  "",
 	}
 	for family, want := range cases {
@@ -614,5 +614,16 @@ func TestEmitAudioCppModel_Transcription(t *testing.T) {
 	}
 	if len(emitted) != 1 {
 		t.Fatalf("emitted = %v, want 1 entry", emitted)
+	}
+}
+
+// A ROCm build must launch with --backend hip: without a flag the server
+// defaults to cuda, which an AMD build cannot open.
+func TestAudioCppFlavour_Rocm(t *testing.T) {
+	for _, v := range []string{"rocm", "hip", "ROCm"} {
+		s := Settings{Backends: []BackendEntry{{ID: "a", Kind: "audiocpp", Variant: v}}}
+		if got := audioCppFlavour(s, "a"); got != "hip" {
+			t.Errorf("variant %q: flavour = %q, want hip", v, got)
+		}
 	}
 }

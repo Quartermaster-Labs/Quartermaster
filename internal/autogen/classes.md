@@ -347,7 +347,7 @@ than a broken disk. A user-written `--config` in the launch box is left alone.
 ### `--backend` is load-bearing
 
 audio.cpp's config defaults to **CUDA**, so a Vulkan or CPU build launched bare fails on a
-non-NVIDIA box. `audioCppFlavour` derives the flag from the installed build's variant; a
+non-NVIDIA box. `audioCppFlavour` derives the flag from the installed build's variant (a `rocm` variant emits `hip`, the only spelling the flag takes); a
 hand-entered registry row records no variant, so the emit carries a `# NOTE` naming the cuda
 default instead of guessing.
 

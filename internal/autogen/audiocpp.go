@@ -524,6 +524,9 @@ func audioCppFlavour(s Settings, id string) string {
 		return "cuda"
 	case "vulkan":
 		return "vulkan"
+	case "rocm", "hip":
+		// The catalog and the device listing both say rocm; the flag only takes hip.
+		return "hip"
 	case "metal", "metal-x64":
 		return "metal"
 	case "cpu", "cpu-portable":
