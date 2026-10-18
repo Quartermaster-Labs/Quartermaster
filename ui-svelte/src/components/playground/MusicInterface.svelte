@@ -22,8 +22,6 @@
   import ModelSelector from "./ModelSelector.svelte";
   import {
     Music,
-    Volume2,
-    VolumeX,
     Download,
     RefreshCw,
     Upload,
@@ -73,6 +71,8 @@
   const stemsModelStore = userPref<string>("playground-music-stems-model", "");
   const autoPlayStore = userPref<boolean>("playground-music-autoplay", false);
   const volumeStore = userPref<number>("playground-music-volume", 1);
+  // Every player carries its own volume control, all bound to this one value.
+  const setVolume = (v: number) => volumeStore.set(Math.min(1, Math.max(0, v)));
 
   // Form fields that are worth keeping across reloads. The prompt and lyrics
   // are the song; the rest is how the user likes to work.
@@ -806,7 +806,7 @@
                 {/if}
               </div>
               {#if source}
-                <AudioPlayer src={source.url} volume={$volumeStore} label={source.label} wide />
+                <AudioPlayer src={source.url} volume={$volumeStore} onvolume={setVolume} label={source.label} wide />
                 {#if source.secs}
                   <span class="text-micro text-txtsecondary tabular-nums">{source.secs.toFixed(1)} s</span>
                 {/if}
@@ -1059,11 +1059,7 @@
           <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Takes</span>
           <span class="font-mono text-micro text-txtsecondary tabular-nums">{turns.length}</span>
           <div class="ml-auto flex items-center gap-2">
-            <VolumeX class="w-3.5 h-3.5 text-txtsecondary shrink-0" />
-            <input type="range" min="0" max="1" step="0.01" bind:value={$volumeStore} class="w-24 accent-primary" aria-label="Playback volume" />
-            <Volume2 class="w-3.5 h-3.5 text-txtsecondary shrink-0" />
-            <span class="font-mono text-micro text-txtsecondary tabular-nums w-9 text-right">{Math.round($volumeStore * 100)}%</span>
-            <label class="shrink-0 flex items-center gap-1.5 pl-3 ml-1 border-l border-card-border-inner text-micro font-medium uppercase tracking-wide text-txtsecondary cursor-pointer" use:tip={"Auto-play new takes"}>
+            <label class="shrink-0 flex items-center gap-1.5 text-micro font-medium uppercase tracking-wide text-txtsecondary cursor-pointer" use:tip={"Auto-play new takes"}>
               <Toggle size="sm" bind:checked={$autoPlayStore} />
               Auto-play
             </label>
@@ -1101,7 +1097,7 @@
                       {#each t.stems as s (s.name)}
                         <div class="flex items-center gap-2 min-w-0">
                           <div class="flex-1 min-w-0">
-                            <AudioPlayer src={s.audio} volume={$volumeStore} label={s.name} wide autoplay={autoPlayRef === s.audio} />
+                            <AudioPlayer src={s.audio} volume={$volumeStore} onvolume={setVolume} label={s.name} wide autoplay={autoPlayRef === s.audio} />
                           </div>
                           <button class="icon-btn shrink-0" onclick={() => download(s.audio, `${fileStem(t, ti)}-${s.name}.wav`)} use:tip={`Download ${s.name}`} aria-label={`Download ${s.name}`}>
                             <Download class="w-3.5 h-3.5" />
@@ -1124,7 +1120,7 @@
                     </div>
                     <p class="text-micro text-txtsecondary leading-snug opacity-80">{DISCLAIMER}</p>
                   {:else if t.audio}
-                    <AudioPlayer src={t.audio} volume={$volumeStore} wide autoplay={autoPlayRef === t.audio} />
+                    <AudioPlayer src={t.audio} volume={$volumeStore} onvolume={setVolume} wide autoplay={autoPlayRef === t.audio} />
                   {:else if pending}
                     <div class="flex items-center justify-between gap-2 h-8">
                       <div class="flex items-center gap-2 text-txtsecondary">
@@ -1336,7 +1332,7 @@
       {#if rt.source}
         <div class="flex flex-col gap-1">
           <span class={labelCls}>Source clip</span>
-          <AudioPlayer src={rt.source} volume={$volumeStore} label={rt.sourceLabel || "source"} wide />
+          <AudioPlayer src={rt.source} volume={$volumeStore} onvolume={setVolume} label={rt.sourceLabel || "source"} wide />
           {#if rt.sourceUrl}
             <a href={rt.sourceUrl} target="_blank" rel="noopener noreferrer" class="truncate text-micro text-txtsecondary hover:text-txtmain underline">{rt.sourceUrl}</a>
           {/if}
@@ -1378,7 +1374,7 @@
         <div class="flex flex-col gap-1">
           <span class={labelCls}>Stems</span>
           {#each rt.stems as st (st.name)}
-            <AudioPlayer src={st.audio} volume={$volumeStore} label={st.name} wide />
+            <AudioPlayer src={st.audio} volume={$volumeStore} onvolume={setVolume} label={st.name} wide />
           {/each}
         </div>
       {/if}
