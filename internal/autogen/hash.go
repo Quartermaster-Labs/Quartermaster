@@ -335,7 +335,8 @@ const hashCacheSuffix = ".modelhash"
 // emitted as a folder model with its VAE companion.
 // v107: on a Vulkan audio.cpp build MiniMax Music 3's q8_0/q4_0 quants load
 // with weight_type f16 (native rendered a hiss) and are priced at that size.
-// v109: a full-precision YuE2 (bf16) takes the f32 VAE when it is on disk.
+// v109: (reverted) a full-precision YuE2 took the f32 VAE; it cannot decode on
+// Vulkan (one 3.6 GB allocation over the device limit), so f16 stays first.
 const genVersion = "v109"
 
 // hashedInput reports whether a file under a models root can change what
