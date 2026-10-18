@@ -48,7 +48,7 @@ export function modelCategory(m: Model): ModelCategory {
   if (c?.image_generation || c?.image_to_image) return "image";
   // Before tts: music and separation models are audio.cpp models like the
   // speech ones, but answer only on /v1/music/* and /v1/audio/separations.
-  if (c?.music_generation || c?.music_edit || c?.audio_separation) return "music";
+  if (c?.music_generation || c?.music_edit || c?.audio_separation || c?.music_transcription) return "music";
   if (c?.audio_speech) return "tts";
   if (c?.audio_transcriptions) return "transcribe";
   // Before embeddings and the llm fallback: a decision model is a llama-server model
@@ -75,14 +75,20 @@ export function largestModel(ms: Model[]): Model | undefined {
   return ms.slice().sort((a, b) => modelWeightGB(b) - modelWeightGB(a) || a.id.localeCompare(b.id))[0];
 }
 
+// A capability is on when it is true, or a non-empty string naming a format
+// (music_score: "abc", music_transcription: "abc").
+function capOn(v: unknown): boolean {
+  return v === true || (typeof v === "string" && v !== "");
+}
+
 export function matchesCapabilities(model: Model, required: string[], matchAny = false): boolean {
   if (!required.length) return true;
   if (!model.capabilities) return false;
   const caps = model.capabilities as Record<string, boolean>;
   if (matchAny) {
-    return required.some((cap) => caps[cap] === true);
+    return required.some((cap) => capOn(caps[cap]));
   }
-  return required.every((cap) => caps[cap] === true);
+  return required.every((cap) => capOn(caps[cap]));
 }
 
 export function groupModels(models: Model[], capabilities?: string[], matchAny = false): GroupedModels {

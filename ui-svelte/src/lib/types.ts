@@ -29,6 +29,8 @@ export interface ModelCapabilities {
   music_score?: string;
   // Stem separator (POST /v1/audio/separations: HTDemucs).
   audio_separation?: boolean;
+  // Score notation a transcriber writes ("abc" for SheetSage2).
+  music_transcription?: string;
   // llama.cpp decision model served by POST /v1/systemone (TypeSafe System One).
   // Answers questions about a state with probabilities instead of chatting.
   decisions?: boolean;

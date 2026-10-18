@@ -4,8 +4,13 @@ import { syncSessions } from "../lib/sessionSync";
 
 // What one take in a music thread was asked to do. "generate" is text to music;
 // the three edits rework an existing clip (ACE-Step only); "separate" splits a
-// clip into stems (HTDemucs).
-export type MusicTask = "generate" | "repaint" | "complete" | "cover" | "separate";
+// clip into stems (HTDemucs); "transcribe" writes a clip down as a score
+// (SheetSage2), held in `score`.
+export type MusicTask = "generate" | "repaint" | "complete" | "cover" | "separate" | "transcribe";
+
+// Where an extracted score came from, carried onto the songs generated with it
+// so a take's References can say which recording its melody is.
+export type ScoreOrigin = { label: string; url?: string };
 
 export type Stem = { name: string; audio: string };
 
@@ -22,7 +27,9 @@ export type Turn = {
   model: string;
   prompt: string;
   lyrics?: string;
+  // The score a generation was conditioned on, or what a transcription wrote.
   score?: string;
+  scoreOrigin?: ScoreOrigin;
   duration?: number;
   seed?: number;
   steps?: number;
@@ -30,6 +37,8 @@ export type Turn = {
   options?: Record<string, string | number>;
   source?: string;
   sourceLabel?: string;
+  // The page a link-fetched source came from.
+  sourceUrl?: string;
   // Repaint window in seconds; end -1 = to the end of the source.
   start?: number;
   end?: number;
@@ -112,13 +121,14 @@ export function newMusicChatId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
-// First prompt, trimmed. A separation has no prompt, so it falls back to what
-// it split.
+// First prompt, trimmed. A separation or a transcription has no prompt, so it
+// falls back to the clip it read.
 export function deriveMusicTitle(turns: Turn[]): string {
   const first = turns.find((t) => t.prompt.trim());
   if (first) return first.prompt.trim().slice(0, 48);
-  const sep = turns.find((t) => t.task === "separate");
-  return sep ? `Stems: ${sep.sourceLabel || "clip"}`.slice(0, 48) : "New music";
+  const ref = turns.find((t) => t.task === "separate" || t.task === "transcribe");
+  if (!ref) return "New music";
+  return `${ref.task === "separate" ? "Stems" : "Score"}: ${ref.sourceLabel || "clip"}`.slice(0, 48);
 }
 
 syncSessions("music", musicSessions, () => get(generatingMusicChatId));

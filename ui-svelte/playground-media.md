@@ -134,10 +134,18 @@ modes on a segmented control, one per route family in `lib/musicApi.ts`:
 - **Create**: text to music (`/v1/music/generations`, ACE-Step, MiniMax Music 3 and YuE2).
 - **Edit**: repaint a time window, complete, or cover an existing clip (`/v1/music/edits`,
   ACE-Step only). The repaint window is dragged across a bar or typed in seconds.
-- **Stems**: four-stem split (`/v1/audio/separations`, HTDemucs). No prompt.
+- **References** (mode key still `stems`, so saved prefs survive the rename): a source clip,
+  uploaded or pulled from a pasted link (`fetchLinkAudio` -> `/v1/tools/media/audio`, yt-dlp,
+  decoded by `toWav` like a file), then either a four-stem split (`/v1/audio/separations`,
+  HTDemucs) or an ABC score (`/v1/music/transcriptions`, SheetSage2), whichever model is picked.
+  No prompt. A score take has "Use this score", which fills the Create form's score box, picks a
+  `music_score` generator, and credits the recording (`playground-music-score-origin`, kept
+  with a copy of the score so an edited box stops claiming the origin). A non-commercial
+  disclaimer sits under the link field, on score takes, and beside a credited score.
 
 Each mode keeps its **own** model pick (`playground-music-model` / `-edit-model` /
-`-stems-model`), filtered by capability (`music_generation`, `music_edit`, `audio_separation`),
+`-stems-model`), filtered by capability (`music_generation`, `music_edit`, `audio_separation`
+or `music_transcription`),
 so switching modes can never leave a model the route would refuse. A mode with no model is
 hidden. `playground-music-model` is also what the dashboard's launch link writes, so an effect
 moves a separator that lands there into the stems pick and switches mode.
@@ -156,6 +164,10 @@ its lyrics, and the route 400s a duration) and to offer its own Planning option 
 `playground-music-cot`); the server's family check is the backstop. Edits over ~24 s fail only on AMD
 Vulkan (the VAE encoder's 2 GB buffer), so the client does not block them and shows the server's
 message instead.
+
+Every generated take has a **References** button (scroll icon) opening a popup of what went
+into it: style/instruction, source clip and its page, lyrics, score and where it was extracted
+from, stems, and the settings (`settingsRows`). Escape or a backdrop click closes it.
 
 Takes are a library, not a conversation: a new take, "New take, new seed" included, is always
 appended and nothing after it is dropped. `execute` reads the stored take rather than the form, so

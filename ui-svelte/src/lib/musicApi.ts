@@ -4,9 +4,12 @@ import { inferenceHeaders } from "./inferenceAuth";
 //   POST /v1/music/generations  text to music (ACE-Step, MiniMax Music 3)
 //   POST /v1/music/edits        repaint / complete / cover (ACE-Step)
 //   POST /v1/audio/separations  stems (HTDemucs)
-// All three are synchronous: the reply is the finished audio. Generation and
+//   POST /v1/music/transcriptions  recording to score (SheetSage2, ABC)
+// All are synchronous: the reply is the finished result. Generation and
 // edits answer raw WAV with the seed actually used in X-Seed; separation
-// answers JSON with one base64 WAV per stem.
+// answers JSON with one base64 WAV per stem, transcription JSON {score, format}.
+// POST /v1/tools/media/audio (internal/server/toolsapi.go) pulls the audio of a
+// page through yt-dlp, for the References tab's link field.
 //
 // Source audio goes up as base64 JSON, not multipart. Both are accepted, but
 // JSON is the shape the routes were verified against end to end.
@@ -102,6 +105,31 @@ export async function separateAudio(model: string, audio: Blob, signal?: AbortSi
   const resp = await post("/v1/audio/separations", { model, audio: await blobToBase64(audio) }, signal);
   const j = (await resp.json()) as { stems?: { name: string; audio: string }[] };
   return (j.stems ?? []).map((s) => ({ name: s.name, blob: base64ToBlob(s.audio, "audio/wav") }));
+}
+
+export async function transcribeAudio(model: string, audio: Blob, signal?: AbortSignal): Promise<{ score: string; format: string }> {
+  const resp = await post("/v1/music/transcriptions", { model, audio: await blobToBase64(audio) }, signal);
+  const j = (await resp.json()) as { score?: string; format?: string };
+  if (!j.score) throw new Error("The transcriber returned no score");
+  return { score: j.score, format: j.format ?? "abc" };
+}
+
+export type LinkAudio = { blob: Blob; title: string; url: string; site: string; duration: number };
+
+// The audio of a page (YouTube or any site yt-dlp handles), as the site serves
+// it (m4a/webm): the server has no ffmpeg, the browser decodes both. Callers
+// run it through toWav like an uploaded file.
+export async function fetchLinkAudio(url: string, signal?: AbortSignal): Promise<LinkAudio> {
+  const resp = await post("/v1/tools/media/audio", { url }, signal);
+  const j = (await resp.json()) as { audio?: string; mime?: string; title?: string; url?: string; site?: string; duration?: number };
+  if (!j.audio) throw new Error("No audio came back for that link");
+  return {
+    blob: base64ToBlob(j.audio, j.mime || "application/octet-stream"),
+    title: j.title || j.url || url,
+    url: j.url || url,
+    site: j.site || "",
+    duration: j.duration ?? 0,
+  };
 }
 
 // Store one clip in the user's media dir and get back its /api/media ref
