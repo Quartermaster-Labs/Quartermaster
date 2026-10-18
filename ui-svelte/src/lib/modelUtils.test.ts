@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchesCapabilities, groupModels, modelWeightGB, largestModel, modelCategory, playgroundTarget } from "./modelUtils";
+import { matchesCapabilities, groupModels, modelWeightGB, largestModel, modelCategory, playgroundTarget, MODEL_CATEGORIES, MODEL_GROUPS } from "./modelUtils";
 import type { Model } from "./types";
 
 function makeModel(overrides: Partial<Model> = {}): Model {
@@ -157,5 +157,17 @@ describe("decision models", () => {
 
   it("open in the decision playground tab", () => {
     expect(playgroundTarget(makeModel({ capabilities: { decisions: true } }))?.tab).toBe("decision");
+  });
+});
+
+describe("MODEL_GROUPS", () => {
+  it("puts every category in exactly one group, in MODEL_CATEGORIES order", () => {
+    const flat = MODEL_GROUPS.flatMap((g) => g.categories);
+    expect([...flat].sort()).toEqual(MODEL_CATEGORIES.map((c) => c.id).sort());
+    const order = MODEL_CATEGORIES.map((c) => c.id);
+    for (const g of MODEL_GROUPS) {
+      const idx = g.categories.map((c) => order.indexOf(c));
+      expect(idx).toEqual([...idx].sort((a, b) => a - b));
+    }
   });
 });

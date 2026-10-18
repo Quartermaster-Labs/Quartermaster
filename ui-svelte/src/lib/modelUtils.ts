@@ -32,6 +32,21 @@ export const MODEL_CATEGORIES: { id: ModelCategory; label: string }[] = [
   { id: "decision", label: "Decision" },
 ];
 
+// The Models page's top tabs: categories grouped by what they work on, so the
+// bar stays three tabs however many categories exist. Every category belongs to
+// exactly one group (a test pins that), and the group's leaves are listed in
+// MODEL_CATEGORIES order so the sub-chips read the same as the old flat tabs.
+export type ModelGroup = "text" | "visual" | "audio";
+export const MODEL_GROUPS: { id: ModelGroup; label: string; categories: ModelCategory[] }[] = [
+  { id: "text", label: "Text", categories: ["llm", "embed", "decision"] },
+  { id: "visual", label: "Visual", categories: ["image", "video", "3d", "segment"] },
+  { id: "audio", label: "Audio", categories: ["music", "tts", "transcribe"] },
+];
+
+export function modelGroupOf(c: ModelCategory): ModelGroup {
+  return MODEL_GROUPS.find((g) => g.categories.includes(c))?.id ?? "text";
+}
+
 // Bucket a model by its declared capabilities. Anything that isn't clearly an
 // image/audio/embedding model falls through to "llm". Segmentation is checked
 // BEFORE image because SAM also declares in:image/out:image (image_to_image),

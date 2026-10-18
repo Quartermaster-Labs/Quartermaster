@@ -195,8 +195,16 @@ why the form cannot be filled in offline. Two consequences for anyone editing it
 ## `/models`, `/models/:category` — Models
 
 `routes/Models.svelte` → `components/ModelsPanel.svelte`. The whole catalog as **ONE spreadsheet
-page**: ONE toolbar row (category tabs counted from `MODEL_CATEGORIES` on the left; All/Loaded/
-Idle + folder picker + ID↔Name + show-unlisted pushed right) over `components/ModelsTable.svelte`.
+page**: ONE toolbar row (group tabs from `MODEL_GROUPS` on the left; All/Loaded/
+Idle + folder picker + ID↔Name + show-unlisted pushed right), a chip row of the active group's
+categories, then `components/ModelsTable.svelte`.
+
+Ten flat category tabs outgrew the bar, so they are grouped by modality: **Text** (LLM, Embed,
+Decision), **Visual** (Image, Video, 3D, Segment), **Audio** (Music, TTS, Transcribe). `tab` is
+still the LEAF category (deep links, folder pickers, `LORA_TABS` read it); the group is derived.
+Empty groups and chips are hidden, except the active one, and all show on an empty catalog.
+Returning to a group reopens the category last used in it. `MODEL_GROUPS` must cover every
+category exactly once (`modelUtils.test.ts`).
 
 The row **wraps, never scrolls** — a scrollbar under the tabs hides categories behind a drag.
 Search is not on that row: it lives in the table's **Model column header**, the column it filters,
