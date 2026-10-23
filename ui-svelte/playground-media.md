@@ -134,18 +134,27 @@ modes on a segmented control, one per route family in `lib/musicApi.ts`:
 - **Create**: text to music (`/v1/music/generations`, ACE-Step, MiniMax Music 3 and YuE2).
 - **Edit**: repaint a time window, complete, or cover an existing clip (`/v1/music/edits`,
   ACE-Step only). The repaint window is dragged across a bar or typed in seconds.
-- **References** (mode key still `stems`, so saved prefs survive the rename): a source clip,
-  uploaded or pulled from a pasted link (`fetchLinkAudio` -> `/v1/tools/media/audio`, yt-dlp,
-  decoded by `toWav` like a file), then either a four-stem split (`/v1/audio/separations`,
-  HTDemucs) or an ABC score (`/v1/music/transcriptions`, SheetSage2), whichever model is picked.
-  No prompt. A score take has "Use this score", which fills the Create form's score box, picks a
-  `music_score` generator, and credits the recording (`playground-music-score-origin`, kept
-  with a copy of the score so an edited box stops claiming the origin). A non-commercial
-  disclaimer sits under the link field, on score takes, and beside a credited score.
+- **Stems** (mode key `stems`): a source clip, uploaded or pulled from a pasted link
+  (`fetchLinkAudio` -> `/v1/tools/media/audio`, yt-dlp, decoded by `toWav` like a file), split
+  into four stems (`/v1/audio/separations`, HTDemucs). No prompt.
+
+**A reference song is not a mode, it is an attachment.** While the picked generator advertises
+`music_score` (YuE2), the composer has a **+** menu: upload a song, paste a link, or load a
+`.abc` file. A song is transcribed in the background with the first `music_transcription` model
+(SheetSage2, `/v1/music/transcriptions`), no Run press, straight into the score
+(`playground-music-score`) and credited to its recording (`playground-music-score-origin`, kept
+with a copy of the score so an edited score stops claiming the origin). It is not a take; the
+score and its origin are copied into the song that uses it. The score floats above the composer
+as a chip: click to view and edit it, the link icon opens the original, the info icon carries the
+non-commercial disclaimer, and X drops it (aborting a read in flight). Generate waits while a read
+runs, and a finished read turns Planning `off` into `melody`, since YuE2 400s a score without one.
+The + exists **only for a score-taking generator**: for any other model a transcription would
+swap SheetSage into VRAM and the generator out for a result nothing reads. A take's menu offers
+"Use as reference" through the same path. Older transcription takes still render, with
+"Use this score".
 
 Each mode keeps its **own** model pick (`playground-music-model` / `-edit-model` /
-`-stems-model`), filtered by capability (`music_generation`, `music_edit`, `audio_separation`
-or `music_transcription`),
+`-stems-model`), filtered by capability (`music_generation`, `music_edit`, `audio_separation`),
 so switching modes can never leave a model the route would refuse. A mode with no model is
 hidden. `playground-music-model` is also what the dashboard's launch link writes, so an effect
 moves a separator that lands there into the stems pick and switches mode.

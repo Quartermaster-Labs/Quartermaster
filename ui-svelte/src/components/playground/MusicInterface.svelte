@@ -42,6 +42,8 @@
     FileText,
     Copy,
     ScrollText,
+    Plus,
+    Info,
   } from "lucide-svelte";
   import { scrollFade } from "../../lib/scrollFade";
   import AudioPlayer from "./AudioPlayer.svelte";
@@ -54,12 +56,15 @@
   // Three modes, one per route family (lib/musicApi.ts):
   //   create  text to music (ACE-Step, MiniMax Music 3)
   //   edit    repaint a window / complete / cover an existing clip (ACE-Step)
-  //   stems   "References" in the UI: a clip, uploaded or pulled from a link
-  //           (yt-dlp), split into four stems (HTDemucs) or written down as a
-  //           score (SheetSage2) for a generator that takes one (YuE2)
+  //   stems   a clip, uploaded or pulled from a link (yt-dlp), split into
+  //           four stems (HTDemucs)
   // Each mode has its own model pick, filtered by capability, so switching modes
-  // never leaves a model selected that the route would refuse. The mode key
-  // stays "stems" so saved prefs survive the rename.
+  // never leaves a model selected that the route would refuse.
+  //
+  // A reference song is not a mode. While the picked generator takes a score
+  // (YuE2), the composer's + accepts a recording, file or link, and SheetSage2
+  // writes its melody down in the background; the score rides above the
+  // composer as a chip until it is dismissed.
   //
   // Every audio field a take holds is a /api/media ref (see stores/musicHistory.ts):
   // results are uploaded once as they land, and the thread only carries refs.
@@ -102,7 +107,7 @@
   const CAP: Record<Mode, string[]> = {
     create: ["music_generation"],
     edit: ["music_edit"],
-    stems: ["audio_separation", "music_transcription"],
+    stems: ["audio_separation"],
   };
   const STORE: Record<Mode, typeof genModelStore> = { create: genModelStore, edit: editModelStore, stems: stemsModelStore };
 
@@ -181,9 +186,9 @@
     }
   }
   let isAce = $derived(mode !== "stems" && !isMiniMax && !isYue);
-  // References mode runs a separator or a transcriber, whichever is picked.
-  let transcribers = $derived(modelsFor.stems.filter((m) => !!m.capabilities?.music_transcription));
-  let isTranscriber = $derived(mode === "stems" && transcribers.some((m) => m.id === model));
+  // Transcribers have no mode of their own: they only ever feed the score.
+  let transcribers = $derived(listed.filter((m) => !!m.capabilities?.music_transcription));
+  let scoreModels = $derived(modelsFor.create.filter((m) => !!m.capabilities?.music_score));
   // The origin applies only while the box still holds the score it came with.
   let scoreOrigin = $derived<ScoreOrigin | null>(
     $scoreOriginStore && $scoreOriginStore.score === $scoreStore ? { label: $scoreOriginStore.label, url: $scoreOriginStore.url } : null,
@@ -191,6 +196,88 @@
 
   const DISCLAIMER =
     "For personal, non-commercial fun. A score extracted from a recording is that song's melody, so anything generated from it is a derivative of someone else's work. SheetSage2 and YuE2 are released for non-commercial use only.";
+
+  // --- reference song -> score -------------------------------------------------
+  // The composer's + takes a recording and transcribes it with no Run press.
+  // Offered only while the picked generator takes a score: for any other model
+  // the transcription would swap SheetSage into VRAM, and the generator back
+  // out, for a result nothing reads. Not a take: the score lands in the form,
+  // credited to its recording, and is copied into the song that uses it.
+  type ScoreJob = { label: string; stage: string; error?: string };
+  let scoreJob = $state<ScoreJob | null>(null);
+  let scoreAbort: AbortController | null = null;
+  let scoreBusy = $derived(!!scoreJob && !scoreJob.error);
+  let attachOpen = $state(false);
+  let attachEl = $state<HTMLElement | undefined>();
+  let attachLink = $state("");
+  let scoreOpen = $state(false);
+
+  type Loaded = { wav: Blob; label: string; link?: string };
+  async function extractScore(label: string, stage: string, load: (signal: AbortSignal) => Promise<Loaded>) {
+    const tm = transcribers[0];
+    if (!tm) return;
+    scoreAbort?.abort();
+    const ac = new AbortController();
+    scoreAbort = ac;
+    attachOpen = false;
+    scoreOpen = false;
+    scoreJob = { label, stage };
+    try {
+      const got = await load(ac.signal);
+      if (scoreAbort !== ac) return;
+      scoreJob = { label: got.label, stage: "Reading the melody…" };
+      const res = await transcribeAudio(tm.id, got.wav, ac.signal);
+      if (scoreAbort !== ac) return;
+      scoreStore.set(res.score);
+      scoreOriginStore.set({ label: got.label, url: got.link, score: res.score });
+      // A reference was attached to be used: with planning off YuE2 would 400 it.
+      if (get(cotStore) === "off") cotStore.set("melody");
+      scoreJob = null;
+    } catch (e) {
+      if (scoreAbort !== ac) return;
+      scoreJob = e instanceof Error && e.name === "AbortError" ? null : { label, stage: "", error: e instanceof Error ? e.message : String(e) };
+    } finally {
+      if (scoreAbort === ac) scoreAbort = null;
+    }
+  }
+
+  function onReferenceFile(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    void extractScore(file.name, "Decoding…", async () => {
+      try {
+        return { wav: await toWav(file), label: file.name };
+      } catch {
+        throw new Error("The browser could not decode that file. Use a WAV, MP3, FLAC or OGG clip.");
+      }
+    });
+  }
+
+  function onReferenceLink() {
+    const url = attachLink.trim();
+    if (!url) return;
+    attachLink = "";
+    void extractScore(url, "Downloading…", async (signal) => {
+      const a = await fetchLinkAudio(url, signal);
+      try {
+        return { wav: await toWav(a.blob), label: a.title, link: a.url };
+      } catch {
+        throw new Error("The browser could not decode the audio that link served.");
+      }
+    });
+  }
+
+  function dismissScore() {
+    scoreAbort?.abort();
+    scoreAbort = null;
+    scoreJob = null;
+    scoreOpen = false;
+    scoreError = "";
+    scoreStore.set("");
+    scoreOriginStore.set(null);
+  }
 
   // --- source clip (edit + stems) -------------------------------------------
   // `url` is what the player plays: a /api/media ref for a take, an object URL
@@ -587,6 +674,7 @@
     if (seedInvalid) return false;
     if (isMiniMax && !$lyricsStore.trim()) return false;
     if (mode === "create" && scoreBlocked) return false;
+    if (mode === "create" && scoreBusy) return false;
     if (mode === "create") return !!prompt.trim();
     if (!source || !prompt.trim()) return false;
     return editTask !== "repaint" || windowValid;
@@ -598,6 +686,7 @@
     if (mode === "edit" && !source) return "Pick a source clip on the left";
     if (isMiniMax && !$lyricsStore.trim()) return "MiniMax Music 3 needs lyrics";
     if (mode === "create" && scoreBlocked) return "A score needs planning on (melody or full)";
+    if (mode === "create" && scoreBusy) return "Reading the reference song…";
     if (seedInvalid) return "The seed must be a whole number";
     if (mode === "edit" && editTask === "repaint" && !windowValid) return "The repaint window is empty";
     return "";
@@ -620,7 +709,7 @@
       return;
     }
     if (mode === "stems") {
-      await runTake(formTurn(isTranscriber ? "transcribe" : "separate", "", ref, src.label, src.link), (sig) => execute(sessionLast(), sig));
+      await runTake(formTurn("separate", "", ref, src.label, src.link), (sig) => execute(sessionLast(), sig));
       return;
     }
     prompt = "";
@@ -675,21 +764,24 @@
     if (t.source && t.task !== "generate") void useTakeAsSource(t.source, t.sourceLabel || "source", m);
   }
 
-  // A transcription's score into the Create form, credited to its recording,
-  // with a generator that takes a score picked if the current one does not.
+  // Into Create with a generator that takes a score, if the current one does not.
+  function toScoreModel() {
+    if (scoreModels.length && !scoreModels.some((m) => m.id === get(genModelStore))) genModelStore.set(scoreModels[0].id);
+    modeStore.set("create");
+  }
+
+  // A transcription take from before the composer did this itself.
   function useScore(t: Turn) {
     if (!t.score) return;
     scoreStore.set(t.score);
     scoreOriginStore.set({ label: t.sourceLabel || "a recording", url: t.sourceUrl, score: t.score });
-    const takes = modelsFor.create.filter((m) => !!m.capabilities?.music_score);
-    if (takes.length && !takes.some((m) => m.id === get(genModelStore))) genModelStore.set(takes[0].id);
-    modeStore.set("create");
+    toScoreModel();
   }
 
-  // A take as the References source, with a transcriber picked to read it.
-  async function extractScoreFrom(ref: string, label: string) {
-    if (transcribers.length && !transcribers.some((m) => m.id === get(stemsModelStore))) stemsModelStore.set(transcribers[0].id);
-    await useTakeAsSource(ref, label, "stems");
+  // A take as the reference for the next song.
+  function extractScoreFrom(ref: string, label: string) {
+    toScoreModel();
+    void extractScore(label, "Loading…", async () => ({ wav: await fetchBlob(ref), label }));
   }
 
   async function copyText(text: string) {
@@ -787,7 +879,7 @@
           <div class="seg w-full" role="group" aria-label="Mode">
             {#each modes as m (m)}
               <button class="flex-1" aria-pressed={mode === m} onclick={() => modeStore.set(m)}>
-                {m === "create" ? "Create" : m === "edit" ? "Edit" : "References"}
+                {m === "create" ? "Create" : m === "edit" ? "Edit" : "Stems"}
               </button>
             {/each}
           </div>
@@ -929,38 +1021,6 @@
               ></textarea>
             </div>
 
-            {#if scoreFormat && mode === "create"}
-              <div class="flex flex-col gap-1.5">
-                <div class="flex items-center gap-2">
-                  <span class={labelCls}>Score ({scoreFormat.toUpperCase()})</span>
-                  <span class="ml-auto text-micro text-txtsecondary">optional, guides the melody</span>
-                  <label class="btn btn--sm inline-flex items-center gap-1.5 cursor-pointer">
-                    <Upload class="w-3.5 h-3.5" />
-                    Load .{scoreFormat}
-                    <input type="file" accept=".{scoreFormat},text/plain" class="hidden" onchange={onScoreFile} />
-                  </label>
-                </div>
-                <textarea
-                  bind:value={$scoreStore}
-                  rows="5"
-                  placeholder={scoreFormat !== "abc" ? "" : "X:1\nM:4/4\nL:1/8\nK:C\nCDEF GABc|"}
-                  class="{inputCls} resize-y font-mono leading-relaxed min-h-[4rem]"
-                ></textarea>
-                {#if scoreOrigin}
-                  <span class="text-micro text-txtsecondary leading-snug">
-                    Extracted from
-                    {#if scoreOrigin.url}
-                      <a href={scoreOrigin.url} target="_blank" rel="noopener noreferrer" class="underline hover:text-txtmain">{scoreOrigin.label}</a>.
-                    {:else}
-                      {scoreOrigin.label}.
-                    {/if}
-                    {DISCLAIMER}
-                  </span>
-                {/if}
-                {#if scoreError}<span class="text-error text-xs">{scoreError}</span>{/if}
-              </div>
-            {/if}
-
             <div class="flex items-end gap-2">
               {#if !isYue && (mode === "create" || editTask === "complete")}
                 <label class="w-20 flex flex-col gap-0.5 text-micro text-txtsecondary">
@@ -1041,14 +1101,7 @@
               {/if}
             </div>
           {:else}
-            <p class="text-xs text-txtsecondary leading-snug">
-              {#if isTranscriber}
-                Writes the source's melody down as an ABC score, which a score-taking model (YuE2) can then sing a new song over. No prompt needed.
-              {:else}
-                Splits the source into drums, bass, vocals and other. No prompt needed.
-              {/if}
-            </p>
-            <p class="text-micro text-txtsecondary leading-snug opacity-80">{DISCLAIMER}</p>
+            <p class="text-xs text-txtsecondary leading-snug">Splits the source into drums, bass, vocals and other. No prompt needed.</p>
           {/if}
         </div>
         <!-- One volume for every player on the page, the source clip included. It
@@ -1201,13 +1254,13 @@
                             <Layers class="w-3.5 h-3.5" /> Split into stems
                           </button>
                         {/if}
-                        {#if t.audio && transcribers.length}
+                        {#if t.audio && transcribers.length && scoreModels.length}
                           <button
                             class="flex items-center gap-2 px-3 py-1.5 text-left text-txtmain hover:bg-secondary disabled:opacity-40"
                             onclick={() => { menuIdx = null; void extractScoreFrom(t.audio!, takeLabel(ti)); }}
                             disabled={sourceBusy}
                           >
-                            <FileText class="w-3.5 h-3.5" /> Extract score
+                            <FileText class="w-3.5 h-3.5" /> Use as reference
                           </button>
                         {/if}
                         {#if t.task !== "separate" && t.task !== "transcribe"}
@@ -1252,15 +1305,64 @@
 
         <!-- Composer: the prompt (style for a song, instruction for an edit), then model + run. -->
         <div class="shrink-0 pt-2.5 pb-3">
+          <!-- The score the next song is sung over, floating on the composer so it
+               is plain that it applies; X drops it (and stops a running read). -->
+          {#if mode === "create" && scoreFormat && (scoreJob || $scoreStore.trim() || scoreError)}
+            <div class="mb-2 flex flex-col gap-1.5">
+              {#if scoreOpen && !scoreJob}
+                <textarea
+                  bind:value={$scoreStore}
+                  rows="6"
+                  aria-label="Score"
+                  class="{inputCls} resize-y font-mono leading-relaxed min-h-[4rem] max-h-[calc(30vh/var(--qm-scale))]"
+                ></textarea>
+              {/if}
+              <div
+                class="self-start max-w-full inline-flex items-center gap-1.5 rounded-xl border bg-surface pl-2.5 pr-1 py-1 text-xs shadow-sm {scoreJob?.error || scoreError
+                  ? 'border-error'
+                  : 'border-card-border'}"
+              >
+                <FileText class="w-3.5 h-3.5 shrink-0 text-txtsecondary" />
+                {#if scoreJob}
+                  <span class="truncate min-w-0">{scoreJob.label}</span>
+                  {#if scoreJob.error}
+                    <span class="truncate min-w-0 text-error" use:tip={scoreJob.error}>{scoreJob.error}</span>
+                  {:else}
+                    <span class="reason-shimmer-white text-micro shrink-0">{scoreJob.stage}</span>
+                  {/if}
+                {:else if scoreError}
+                  <span class="truncate min-w-0 text-error">{scoreError}</span>
+                {:else}
+                  <button
+                    class="inline-flex items-center gap-1 min-w-0 text-txtmain hover:text-primary"
+                    onclick={() => (scoreOpen = !scoreOpen)}
+                    use:tip={scoreOpen ? "Hide the score" : "Show and edit the score"}
+                  >
+                    <span class="truncate">Score{scoreOrigin ? ` from ${scoreOrigin.label}` : ` (${scoreFormat.toUpperCase()})`}</span>
+                    <ChevronDown class="w-3.5 h-3.5 shrink-0 transition-transform {scoreOpen ? 'rotate-180' : ''}" />
+                  </button>
+                  {#if scoreOrigin?.url}
+                    <a href={scoreOrigin.url} target="_blank" rel="noopener noreferrer" class="shrink-0 text-txtsecondary hover:text-txtmain" use:tip={"Open the original"} aria-label="Open the original">
+                      <LinkIcon class="w-3.5 h-3.5" />
+                    </a>
+                  {/if}
+                  {#if scoreOrigin}
+                    <span class="shrink-0 text-txtsecondary" use:tip={DISCLAIMER}><Info class="w-3.5 h-3.5" /></span>
+                  {/if}
+                {/if}
+                <button class="icon-btn !w-6 !h-6 shrink-0" onclick={dismissScore} use:tip={scoreBusy ? "Stop and drop the reference" : "Drop the score"} aria-label="Drop the score">
+                  <X class="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          {/if}
           <div class="rounded-[1.125rem] border border-composer-border bg-surface hover:ring-1 hover:ring-composer-ring focus-within:border-primary transition-all">
             <textarea
               bind:this={promptEl}
               class="block w-full bg-transparent px-4 pt-3.5 pb-1.5 text-sm leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary pretty-scroll min-h-[3rem] max-h-[calc(40vh/var(--qm-scale))] disabled:opacity-50"
               rows="2"
               placeholder={mode === "stems"
-                ? isTranscriber
-                  ? "A score needs no prompt: pick a source and press play"
-                  : "Stems need no prompt: pick a source and press play"
+                ? "Stems need no prompt: pick a source and press play"
                 : mode === "edit"
                   ? editTask === "cover"
                     ? "Describe the cover, e.g. energetic pop with bright synths…"
@@ -1272,7 +1374,47 @@
               bind:value={prompt}
               onkeydown={handleKeyDown}
             ></textarea>
-            <div class="flex items-center gap-2.5 pl-3 pr-2 pb-2 pt-1 min-w-0">
+            <div class="flex items-center gap-2.5 pl-2 pr-2 pb-2 pt-1 min-w-0">
+              {#if mode === "create" && scoreFormat}
+                <div bind:this={attachEl} class="relative shrink-0">
+                  <button
+                    class="icon-btn !rounded-full w-8 h-8"
+                    onclick={() => (attachOpen = !attachOpen)}
+                    disabled={isGenerating}
+                    aria-haspopup="menu"
+                    aria-expanded={attachOpen}
+                    aria-label="Add a reference song"
+                    use:tip={"Add a reference song: its melody becomes the score"}
+                  >
+                    <Plus class="w-4 h-4" />
+                  </button>
+                  {#if attachOpen}
+                    <div class="absolute left-0 bottom-full mb-2 z-30 w-72 flex flex-col rounded-lg border border-card-border bg-surface shadow-lg py-1 text-[0.8125rem]" role="menu">
+                      {#if transcribers.length}
+                        <label class="flex items-center gap-2 px-3 py-1.5 text-txtmain hover:bg-secondary cursor-pointer">
+                          <Upload class="w-3.5 h-3.5" /> Upload a song
+                          <input type="file" accept="audio/*,.wav,.mp3,.flac,.ogg" class="hidden" onchange={onReferenceFile} />
+                        </label>
+                        <form class="flex items-center gap-1.5 px-3 py-1.5" onsubmit={(e) => { e.preventDefault(); onReferenceLink(); }}>
+                          <div class="relative flex-1 min-w-0">
+                            <LinkIcon class="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-txtsecondary pointer-events-none" />
+                            <input type="url" bind:value={attachLink} placeholder="YouTube or other link" class="{inputCls} !pl-7" />
+                          </div>
+                          <button type="submit" class="btn btn--sm shrink-0" disabled={!attachLink.trim()}>Add</button>
+                        </form>
+                        <span class="px-3 pb-1 text-micro text-txtsecondary leading-snug">SheetSage2 reads its melody into a score. No Run needed.</span>
+                      {:else}
+                        <span class="px-3 py-1.5 text-xs text-txtsecondary leading-snug">Download SheetSage2 to use a song as a reference.</span>
+                      {/if}
+                      <div class="my-1 border-t border-card-border-inner"></div>
+                      <label class="flex items-center gap-2 px-3 py-1.5 text-txtmain hover:bg-secondary cursor-pointer">
+                        <FileText class="w-3.5 h-3.5" /> Load a .{scoreFormat} score
+                        <input type="file" accept=".{scoreFormat},text/plain" class="hidden" onchange={(e) => { attachOpen = false; scoreAbort?.abort(); scoreJob = null; void onScoreFile(e); }} />
+                      </label>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
               <div class="min-w-0">
                 {#key mode}
                   <ModelSelector
@@ -1300,8 +1442,8 @@
                   class="btn btn--primary btn--icon !rounded-full w-8 h-8 shrink-0"
                   onclick={send}
                   disabled={!canRun}
-                  use:tip={mode === "stems" ? (isTranscriber ? "Extract score" : "Split") : mode === "edit" ? "Edit" : "Compose"}
-                  aria-label={mode === "stems" ? (isTranscriber ? "Extract score" : "Split") : mode === "edit" ? "Edit" : "Compose"}
+                  use:tip={mode === "stems" ? "Split" : mode === "edit" ? "Edit" : "Compose"}
+                  aria-label={mode === "stems" ? "Split" : mode === "edit" ? "Edit" : "Compose"}
                 >
                   <Play class="w-3.5 h-3.5" fill="currentColor" />
                 </button>
@@ -1318,7 +1460,14 @@
   {/if}
 </div>
 
-<svelte:window onkeydown={(e) => { if (refsOf && e.key === "Escape") refsOf = null; }} />
+<svelte:window
+  onkeydown={(e) => {
+    if (e.key !== "Escape") return;
+    if (refsOf) refsOf = null;
+    attachOpen = false;
+  }}
+  onpointerdown={(e) => { if (attachOpen && attachEl && !attachEl.contains(e.target as Node)) attachOpen = false; }}
+/>
 
 {#if refsOf}
   {@const rt = refsOf.t}
