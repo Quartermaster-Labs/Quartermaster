@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/quartermaster-labs/quartermaster/internal/process"
 )
 
 func pcm16WAV(samples []int16, channels, rate int) []byte {
@@ -491,5 +493,28 @@ CDEF|`
 	writeMusicResponse(rec, httptest.NewRequest(http.MethodPost, "/", nil), musicTranscribe, "", 0, up)
 	if rec.Code != http.StatusBadGateway {
 		t.Errorf("no ABC artifact: status %d, want 502", rec.Code)
+	}
+}
+
+// Hanging up must not kill a process someone else is still using, nor one that
+// is still loading: Unload drops every request on it.
+func TestAbandonedMusicStoppable(t *testing.T) {
+	cases := []struct {
+		name     string
+		inflight int64
+		known    bool
+		state    process.ProcessState
+		want     bool
+	}{
+		{"idle and ready", 0, true, process.StateReady, true},
+		{"another take queued", 1, true, process.StateReady, false},
+		{"still loading", 0, true, process.StateStarting, false},
+		{"not running", 0, true, "", false},
+		{"unknown model", 0, false, process.StateReady, false},
+	}
+	for _, c := range cases {
+		if got := abandonedMusicStoppable(c.inflight, c.known, c.state); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
 	}
 }

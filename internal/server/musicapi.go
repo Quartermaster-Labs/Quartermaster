@@ -24,6 +24,8 @@ package server
 // scheduler counts the model as busy without the lease machinery video needs
 // (videojobs.go exists only because sd-server's job API returns before the work
 // does). The upstream transport has no response-header timeout by default.
+// audio.cpp has no cancel, so a caller that hangs up mid-run gets the process
+// stopped instead (stopAbandonedMusic).
 //
 // The seed is always explicit upstream: one the caller omitted is drawn here
 // and echoed back (X-Seed, and "seed" in JSON), so any result can be replayed,
@@ -51,6 +53,7 @@ import (
 
 	"github.com/quartermaster-labs/quartermaster/internal/apppaths"
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
+	"github.com/quartermaster-labs/quartermaster/internal/process"
 	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
@@ -254,6 +257,10 @@ func (s *Server) handleMusic(route musicRoute) http.HandlerFunc {
 
 		buf := newBufferedResponseWriterLimit(musicResponseLimit)
 		s.localPeerHandler(buf, up)
+		if r.Context().Err() != nil {
+			s.stopAbandonedMusic(data.ModelID)
+			return
+		}
 		if buf.over {
 			s.proxylog.Errorf("music: upstream response for model %s exceeded %d bytes", data.ModelID, musicResponseLimit)
 			shared.SendResponse(w, r, http.StatusBadGateway, "upstream response too large")
@@ -269,6 +276,32 @@ func (s *Server) handleMusic(route musicRoute) http.HandlerFunc {
 		}
 		writeMusicResponse(w, r, route, req.ResponseFormat, seed, buf.body.Bytes())
 	}
+}
+
+// stopAbandonedMusic stops a model whose caller hung up mid-run. audio.cpp
+// cannot cancel a job: closing the connection leaves it running to the end
+// (its busy timeout "does not cancel backend execution"), holding the GPU and
+// queueing the user's next take behind a song nobody will hear. Killing the
+// process is the only stop there is, so the playground's Stop button, an API
+// client's timeout and a closed tab all land here.
+//
+// Unload takes down every request on the process, so it is skipped while
+// anything else is using the model (another user's take queued behind this
+// one, a held lease) and while it is not Ready (a caller that gave up during
+// the swap-in may share that load with others still waiting for it). A
+// request landing between the check and the stop is lost the same way; that
+// window is one run-loop round trip.
+func (s *Server) stopAbandonedMusic(modelID string) {
+	n, known := s.local.Inflight(modelID)
+	if !abandonedMusicStoppable(n, known, s.local.RunningModels()[modelID]) {
+		return
+	}
+	s.proxylog.Infof("music: caller for %s hung up mid-run; stopping it (audio.cpp cannot cancel a job)", modelID)
+	s.local.UnloadWithReason(process.StopManual, apiUnloadTimeout, modelID)
+}
+
+func abandonedMusicStoppable(inflight int64, known bool, state process.ProcessState) bool {
+	return known && inflight == 0 && state == process.StateReady
 }
 
 // musicCapacityError turns audio.cpp's bare allocation failure for an ACE-Step
