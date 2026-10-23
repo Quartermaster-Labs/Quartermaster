@@ -550,16 +550,16 @@ func buildMusicUpstream(route musicRoute, family string, req musicRequest) (uint
 			return 0, nil, nil, musicError("lyrics are required for MiniMax Music")
 		}
 		if family == "yue2" {
-			// YuE2 takes its prompt as the style option, and reads lyrics from the
-			// text input when the lyrics option is absent, which would sing the
-			// style tags. An empty lyrics option only leaves the prompt's [Lyrics]
-			// section empty: YuE2 has no instrumental mode, and the base model is a
-			// vocal model that can still sing made-up words. Upstream's route to
-			// instrumentals is a separate AR LoRA (cot=full, "[instrumental]").
+			// YuE2 takes its prompt as the style option, and the task's text is
+			// NOT sent (below): audio.cpp reads lyrics from the text input when
+			// the lyrics option is missing, and its find_option counts an EMPTY
+			// option as missing, so `lyrics: ""` beside the prompt as text sang
+			// the style tags. With no text, no lyrics is an empty [Lyrics]
+			// section. That is still not instrumental: YuE2 has no such mode,
+			// and the base model is a vocal model that can sing made-up words.
+			// Upstream's route to instrumentals is a separate AR LoRA (cot=full,
+			// "[instrumental]").
 			opts["style"] = req.Prompt
-			if req.Lyrics == nil {
-				opts["lyrics"] = ""
-			}
 			if req.Duration != nil {
 				return 0, nil, nil, musicError("YuE2 has no duration: the song is as long as its lyrics")
 			}
@@ -619,7 +619,7 @@ func buildMusicUpstream(route musicRoute, family string, req musicRequest) (uint
 	}
 
 	inner := map[string]any{"options": opts}
-	if takesPrompt {
+	if takesPrompt && family != "yue2" {
 		inner["text"] = req.Prompt
 		if req.Language != "" {
 			inner["language"] = req.Language

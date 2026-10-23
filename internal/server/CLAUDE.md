@@ -103,9 +103,11 @@ Also here: `turns_design.md` — the turn runner's design notes.
   the request, anything older than an hour swept), and pass audio.cpp an absolute path it built
   itself. Options go through a per-family whitelist (`musicFamilyOptions`) that names no path
   option; an unknown key is a 400. YuE2 takes its prompt as the `style` option and reads lyrics
-  from the task's `text` when the `lyrics` option is absent, so the route always sends `lyrics`
-  (empty = no lyrics, which is NOT instrumental: YuE2 has no such mode and may still sing) or it
-  would sing the style tags; it also 400s a `duration`. A written score is the typed `score`
+  from the task's `text` when the `lyrics` option is absent, and audio.cpp's `find_option`
+  counts an EMPTY option as absent, so the route sends YuE2 **no `text` at all** (an empty
+  `lyrics` beside the prompt as text sang the style tags). No lyrics is then an empty [Lyrics]
+  section, which is NOT instrumental: YuE2 has no such mode and may still sing. It also 400s a
+  `duration`. A written score is the typed `score`
   field, INLINE text only (64 KiB cap, generation only), mapped onto the family's own option by
   `autogen.AudioCppMusicScore`; the option itself (`abc`) is off the whitelist so there is one
   door, and a score with the family's skip mode (`cot=off`) is a 400 rather than silently dropped.

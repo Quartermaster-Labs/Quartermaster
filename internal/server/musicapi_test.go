@@ -178,8 +178,9 @@ func TestBuildMusicUpstream_Generate(t *testing.T) {
 	}
 }
 
-// YuE2 reads the prompt as its style option, and an absent lyrics option makes
-// it sing the text input, so an instrumental request must send lyrics "".
+// YuE2 reads the prompt as its style option and must get no text input: with
+// the lyrics option absent OR empty (audio.cpp treats the two alike) it sings
+// the text, which was the prompt.
 func TestBuildMusicUpstream_Yue2(t *testing.T) {
 	_, body, _, err := buildMusicUpstream(musicGenerate, "yue2", musicRequest{
 		Model: "yue2-3b-q8_0", Prompt: "dream pop, female vocal", Seed: ptr(int64(1 << 40)),
@@ -188,7 +189,10 @@ func TestBuildMusicUpstream_Yue2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, opts := upstreamDoc(t, body)
+	_, inner, opts := upstreamDoc(t, body)
+	if _, ok := inner["text"]; ok {
+		t.Errorf("yue2 was sent text %v; with no lyrics it sings it", inner["text"])
+	}
 	want := map[string]string{
 		"style": "dream pop, female vocal", "seed": "1099511627776",
 		"num_inference_steps": "8", "guidance_scale": "1.5", "cot": "melody", "semantic_top_k": "50",
@@ -197,9 +201,6 @@ func TestBuildMusicUpstream_Yue2(t *testing.T) {
 		if opts[k] != v {
 			t.Errorf("option %s = %q, want %q", k, opts[k], v)
 		}
-	}
-	if v, ok := opts["lyrics"]; !ok || v != "" {
-		t.Errorf("lyrics = %q (present %v), want an explicit empty string", v, ok)
 	}
 	if _, ok := opts["route"]; ok {
 		t.Error("yue2 got an ACE-Step route option")
