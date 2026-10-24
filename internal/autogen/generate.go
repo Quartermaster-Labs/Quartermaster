@@ -137,6 +137,10 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 	// otherwise outranks the real conditioner (see encoderpool.go).
 	s.autoEnhancers = detectEnhancers(rows)
 
+	// Qwen3-ASR's forced aligner is a companion found anywhere in the scanned
+	// roots, not beside the ASR (see audiocppaligner.go).
+	s.qwen3Aligner = detectQwen3Aligner(rows)
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Quartermaster config - generated %s\n", nowRFC)
 	fmt.Fprintf(&b, "# TargetVramGB=%g  MaxRamGB=%g  Threads=%d\n", s.TargetVramGB, s.MaxRamGB, s.Threads)

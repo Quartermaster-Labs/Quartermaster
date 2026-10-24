@@ -338,7 +338,9 @@ const hashCacheSuffix = ".modelhash"
 // v109: (reverted) a full-precision YuE2 took the f32 VAE; it cannot decode on
 // Vulkan (one 3.6 GB allocation over the device limit), so f16 stays first.
 // v110: SheetSage2 is emitted as task "midi" with musicTranscribe: abc.
-const genVersion = "v111"
+// v112: qwen3_asr takes the Qwen3 ForcedAligner (and an absolute VAD path)
+// as session options when one is on disk, for word timestamps.
+const genVersion = "v112"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

@@ -119,6 +119,17 @@ Also here: `turns_design.md` — the turn runner's design notes.
   byte for byte unless the family has a hard rate (HTDemucs: 44.1 kHz, `musicFamilyInputRate`),
   which is the only case `musicwav.go` resamples; ACE-Step resamples its own input, and re-encoding
   it here would make an edit differ from the CLI fed the same file.
+- **Word timestamps go through audio.cpp's `/details` route, never its multipart one**
+  (`transcribe.go`). The multipart transcription handler reads file/model/language/prompt and
+  nothing else, and timestamps are the per-request option `return_timestamps`, so a
+  verbose_json request with `timestamp_granularities` is staged like a music input and sent as
+  JSON with `options`. Requests without them are forwarded as sent, because the aligner pass
+  costs real time and `return_timestamps` is deliberately not a session default. The audio is
+  always sent at **16 kHz mono**, and that is correctness, not thrift: audio.cpp rescales
+  chunked word spans to the model's 16 kHz but reports the INPUT rate as `sample_rate`, so a
+  48 kHz upload would read back every time at a third of its value. parakeet-server gets the
+  same normalization (a 48 kHz stereo song was a 502 with an empty body there), and its
+  verbose_json, which is one segment for the whole file, has its segments rebuilt from words.
 - **The config editor is `-generate`-only** — every handler 501s when `s.autogen == nil`.
 
 ## Connections

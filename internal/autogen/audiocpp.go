@@ -643,7 +643,11 @@ func emitAudioCppModel(b *strings.Builder, s Settings, row GgufRow, ov *Override
 		emitAudioCppCompanionModel(b, s, row, ov, name, family, task, c, overhead, emitted)
 		return
 	}
-	writeAudioCppEntry(b, s, row, ov, name, family, task, strings.ReplaceAll(row.FullPath, "\\", "/"), audioCppFamilySessionOptions[family], row.SizeGB, row.SizeGB+overhead)
+	opts, estGB := audioCppFamilySessionOptions[family], row.SizeGB+overhead
+	if family == qwen3AsrFamily {
+		opts, estGB = qwen3AsrSessionOptions(b, s, ov, opts, estGB)
+	}
+	writeAudioCppEntry(b, s, row, ov, name, family, task, strings.ReplaceAll(row.FullPath, "\\", "/"), opts, row.SizeGB, estGB)
 	*emitted = append(*emitted, name)
 }
 

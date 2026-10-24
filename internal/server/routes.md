@@ -13,6 +13,13 @@ Everything is registered in `routes` (`server.go`). Model-dispatched routes (`mo
   `/v1/systemone` (llama.cpp decision models; llama-server validates the body),
   and the `/v/...` versionless equivalents.
 - **`POST` form** — `/v1/audio/transcriptions`, `/v1/images/edits`.
+  `/v1/audio/transcriptions` is wrapped by `handleTranscription` (`transcribe.go`) for two
+  engines. An audio.cpp ASR asked for `response_format=verbose_json` with
+  `timestamp_granularities[]=word|segment` is rewritten to JSON on audio.cpp's
+  `/v1/audio/transcriptions/details` (staged 16 kHz mono file, `options.return_timestamps`)
+  and answered as OpenAI verbose_json (`words` in seconds, `segments` split on 0.8 s gaps);
+  anything else is forwarded as sent. parakeet-server gets its upload as 16 kHz mono PCM16,
+  and its verbose_json segments rebuilt from words.
 - **`POST` raw** — `/v1/3d/generations`: the body IS the payload (the source image,
   sent as-is), so the model id arrives as `?model=<id>` and the context extractor reaches
   it through form parsing's query fallback rather than a body field. TRELLIS.2 image-to-3D

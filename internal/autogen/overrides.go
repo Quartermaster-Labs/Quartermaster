@@ -253,6 +253,11 @@ type Settings struct {
 	// built anywhere else (the UI, a test) simply has none, and auto-pairing is
 	// then off rather than stale.
 	autoEnhancers autoEnhancers
+
+	// qwen3Aligner is the Qwen3 ForcedAligner gguf discovery found this run,
+	// the word-timestamp companion of every qwen3_asr entry. Derived and
+	// unexported for the same reason as autoEnhancers. See audiocppaligner.go.
+	qwen3Aligner *audioCppAligner
 }
 
 // ExtraImageModel is one hand-declared sd-server image model (see

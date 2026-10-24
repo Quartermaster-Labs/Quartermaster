@@ -462,3 +462,19 @@ diffusion component (`encoderFileRe`, `discover.go`), so it is found only by nam
 main file. A main file with no VAE beside it is a
 `# SKIPPED ... needs its companion` comment. `auk` has the same shape with THREE components
 (generator, a Qwen2.5-Omni-3B conditioner, VAE) and is experimental, so it stays at 0.
+
+**Qwen3-ASR takes the Qwen3 ForcedAligner as a companion from ANOTHER folder**
+(`audiocppaligner.go`). Word timestamps are the aligner run inside the ASR session, so the
+aligner (`qwen3_forced_aligner`, class 0) is never served alone. It ships as its own repo, so
+unlike `audioCppCompanions` it is found across every scanned root: `Generate` sets
+`s.qwen3Aligner = detectQwen3Aligner(rows)`, which header-reads only rows whose file name says
+`align` (the header has the last word). Every `qwen3_asr` entry then gets
+`qwen3_asr.forced_aligner_path` as an ABSOLUTE path and the aligner's size in `estVramGB`
+(it is resident for the session's life, whether or not a request asks for timestamps).
+`qwen3_asr.vad_model_path` is pinned absolute too when `assets/framework/models/silero_vad`
+is found beside the binary or up to three levels above it (a source build keeps assets at the
+checkout root). audio.cpp resolves the relative default against the process cwd, and every
+backend is spawned from QUARTERMASTER's directory (`process.spawnDir`), so the default never
+resolves; timestamp requests chunk on VAD. No aligner on disk is a `# NOTE` and a text-only ASR.
+`return_timestamps` is deliberately NOT a session default: the request route asks for it
+(`internal/server/transcribe.go`), so plain transcription stays fast.
