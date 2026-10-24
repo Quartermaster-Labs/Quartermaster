@@ -105,6 +105,10 @@ var mediaGCGrace = 10 * time.Minute
 
 var pgUserRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
 
+// mediaNameRe is an uploaded media file's name: a content-hash prefix and the
+// extension mimeExt picked.
+var mediaNameRe = regexp.MustCompile(`^[0-9a-f]{16}\.[a-z0-9]+$`)
+
 // SetPlayground attaches (or clears) the playground config. Called once at
 // startup and re-attached to each rebuilt server on reload, like AutogenAdmin.
 func (s *Server) SetPlayground(p *Playground) { s.playground = p }
@@ -854,6 +858,12 @@ func (s *Server) handlePlaygroundMediaUpload(w http.ResponseWriter, r *http.Requ
 	}
 	sum := sha256.Sum256(data)
 	name := hex.EncodeToString(sum[:8]) + "." + mimeExt(mt)
+	// Both already hold by construction (userFromRequest, mimeExt); checked
+	// again here, where the path is built, so the guard is next to its use.
+	if !pgUserRe.MatchString(user) || !mediaNameRe.MatchString(name) {
+		http.Error(w, "bad media name", http.StatusBadRequest)
+		return
+	}
 	dir := filepath.Join(p.mediaDir(user), kind)
 	path := filepath.Join(dir, name)
 	// Under p.mu: gcMedia runs under it too, so it sees either no file or one
