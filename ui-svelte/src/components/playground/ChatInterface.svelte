@@ -192,6 +192,15 @@
       return copy;
     });
   }
+
+  // The header's rename. A cleared title goes back to the automatic one. It
+  // bumps updatedAt: other open tabs only take a strictly newer copy, so an
+  // unbumped rename would be reverted by the next sync.
+  function renameThread(title: string) {
+    const s = activeSession;
+    if (!s) return;
+    patchSession(s.id, title ? { title, titled: true } : { title: deriveTitle(s.messages), titled: false }, true);
+  }
   function appendMessage(id: string, msg: ChatMessage) {
     const cur = sessionById(id);
     if (!cur) return;
@@ -1262,7 +1271,8 @@
     if (!session || session.titled) return;
     if (!session.messages.some((m) => m.role === "assistant" && typeof m.content === "string" && m.content.trim())) return;
     const title = await generateTitle(modelId, session.messages as ChatMessage[], signal);
-    if (!title) return;
+    // The user may have renamed the chat while the model was thinking.
+    if (!title || sessionById(id)?.titled) return;
     patchSession(id, { title, titled: true }); // no bump — a late title shouldn't reorder
   }
 
@@ -1776,6 +1786,7 @@
 
   <PaneHeader
     title={activeSession?.title || "New chat"}
+    onRename={activeSession ? renameThread : undefined}
     meta={messages.length ? `${messages.length} msg${messages.length === 1 ? "" : "s"}` : ""}
     updatedAt={messages.length ? activeSession?.updatedAt : undefined}
     newLabel="New chat"

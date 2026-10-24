@@ -98,6 +98,15 @@
       return copy;
     });
   }
+
+  // The header's rename. A cleared title goes back to the automatic one. It
+  // bumps updatedAt: other open tabs only take a strictly newer copy, so an
+  // unbumped rename would be reverted by the next sync.
+  function renameThread(title: string) {
+    const s = activeSession;
+    if (!s) return;
+    patchSession(s.id, title ? { title, titled: true } : { title: deriveThreeDTitle(s.turns), titled: false }, true);
+  }
   function appendTurn(id: string, turn: Turn) {
     const s = sessionById(id);
     if (!s) return;
@@ -331,6 +340,7 @@
   {:else}
     <PaneHeader
       title={activeSession?.title || "New mesh"}
+      onRename={activeSession ? renameThread : undefined}
       meta={`${turns.length} mesh${turns.length === 1 ? "" : "es"}`}
       updatedAt={activeSession?.updatedAt}
       newLabel="New thread"

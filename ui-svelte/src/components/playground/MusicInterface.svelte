@@ -518,6 +518,15 @@
       return copy;
     });
   }
+
+  // The header's rename. A cleared title goes back to the automatic one. It
+  // bumps updatedAt: other open tabs only take a strictly newer copy, so an
+  // unbumped rename would be reverted by the next sync.
+  function renameThread(title: string) {
+    const s = activeSession;
+    if (!s) return;
+    patchSession(s.id, title ? { title, titled: true } : { title: deriveMusicTitle(s.turns), titled: false }, true);
+  }
   function appendTurn(id: string, turn: Turn): number {
     const s = sessionById(id);
     if (!s) return -1;
@@ -906,6 +915,7 @@
 <div class="flex flex-col h-full">
   <PaneHeader
     title={activeSession?.title || "New music"}
+    onRename={activeSession ? renameThread : undefined}
     meta={turns.length ? `${turns.length} take${turns.length === 1 ? "" : "s"}` : ""}
     updatedAt={turns.length ? activeSession?.updatedAt : undefined}
     newLabel="New"

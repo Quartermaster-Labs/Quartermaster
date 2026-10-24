@@ -391,6 +391,13 @@ travel explicitly *and* leave a 60 s **tombstone** — naming the deletion is no
 because the other document's in-flight broadcast was composed before it heard and still carries the
 corpse. Tested in `lib/sessionSync.test.ts`, including that race.
 
+A merge takes a remote copy only when its `updatedAt` is **strictly** newer, so an edit that does
+not bump is invisible to the other documents and is reverted by their next PUT. That is why the
+header's rename (`PaneHeader` `onRename`, each tab's `renameThread`) bumps even though it moves the
+thread to the top of the history. It sets `titled`, which every auto-title path already honours;
+Chat's model-written title re-checks it after its request returns, since a rename can land while
+the model is still thinking. A cleared title goes back to the tab's derived one (`titled: false`).
+
 ## Conventions
 
 - **Svelte 5 runes** throughout — `$state`, `$derived`, `$effect`, `$props`; stores read with the
