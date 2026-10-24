@@ -534,6 +534,13 @@
   });
 
   let abortController: AbortController | null = null;
+  let rootEl = $state<HTMLElement | null>(null);
+
+  // A new take means the user is done listening: stop whatever this tab is
+  // playing (a take, a stem, the source clip) rather than talk over the run.
+  function stopPlayback() {
+    rootEl?.querySelectorAll("audio").forEach((a) => a.pause());
+  }
   let elapsed = $state(0);
   let menuIdx = $state<number | null>(null);
   // The take that should start playing once its player has loaded.
@@ -567,6 +574,7 @@
     if (!sessionById(id) || isGenerating) return;
     const ti = appendTurn(id, turn);
     if (ti < 0) return;
+    stopPlayback();
     gen = { id, ti };
     abortController = new AbortController();
     const started = Date.now();
@@ -872,7 +880,7 @@
       <p>No music models. Download ACE-Step, MiniMax Music 3, YuE2, HTDemucs or SheetSage2 from the model browser to use this tab.</p>
     </div>
   {:else}
-    <div class="flex-1 min-h-0 flex">
+    <div bind:this={rootEl} class="flex-1 min-h-0 flex">
       <!-- LEFT: mode + settings. -->
       <aside class="w-[19.375rem] shrink-0 flex flex-col min-h-0 bg-rail border-r border-card-border-inner">
         <div class="flex items-center gap-2 px-3 h-10 border-b border-card-border-inner shrink-0">
