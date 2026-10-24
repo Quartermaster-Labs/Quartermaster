@@ -1,4 +1,5 @@
 import { writable } from "svelte/store";
+import { refreshInferenceKey, clearInferenceKey } from "../lib/inferenceAuth";
 
 // Current playground user (username), or null when logged out. Not serious auth
 // — it only keys server-side chat history per user.
@@ -44,6 +45,11 @@ async function credentials(path: string, username: string, password: string): Pr
   });
   if (!r.ok) throw new Error((await r.text()).trim() || "request failed");
   const j = await r.json();
+  // The key fetch at page load ran logged out and came back empty for a remote
+  // browser (/api/inference-key is behind the login), so without this every
+  // direct /v1 call (titles, images, the References link fetch) went out keyless
+  // until a reload. Fetched before `me` flips, so the app mounts with it.
+  await refreshInferenceKey();
   me.set(j.username);
 }
 
@@ -64,5 +70,6 @@ export async function logout(): Promise<void> {
   } catch {
     // best-effort; clear locally regardless
   }
+  clearInferenceKey();
   me.set(null);
 }

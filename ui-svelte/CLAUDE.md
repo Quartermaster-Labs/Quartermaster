@@ -8,7 +8,7 @@ port-gated into two apps** (`App.svelte` `onMount` fetches `GET /api/mode`):
 - **Operator dashboard** (main listen port): model catalog and loading, per-model config tuning,
   live activity/metrics/logs, GPU memory, API-key management.
 - **Playground** (separate `-playground-port`): a login-gated, per-user interactive app (chat,
-  images, video, 3D, speech, transcription, decision) with **server-backed** chat history + prefs. Rendered by
+  images, video, 3D, speech, music, transcription, decision) with **server-backed** chat history + prefs. Rendered by
   `PlaygroundApp`, NOT mounted inside the dashboard.
 
 ## Which doc
@@ -19,7 +19,7 @@ port-gated into two apps** (`App.svelte` `onMount` fetches `GET /api/mode`):
 | [`browse.md`](browse.md) | `/browse` — the Hugging Face model browser: filters, infinite scroll, model-card sanitization, the file table and the fit column |
 | [`playground-chat.md`](playground-chat.md) | `ChatInterface` / `ChatMessage` — server-run turns, reasoning headers, read-aloud, diagrams |
 | [`playground-tools.md`](playground-tools.md) | Modes, tools and the KV-prefix rules: web search, assistant tools, memory, ask wizard, shopping, file attachments |
-| [`playground-media.md`](playground-media.md) | The Image and Speech studios + `MaskEditor` |
+| [`playground-media.md`](playground-media.md) | The Image, Speech and Music studios + `MaskEditor` |
 | [`playground-3d.md`](playground-3d.md) | The 3D tab: the promptless composer, the synchronous TRELLIS.2 route and the GLB viewer's disposal rules |
 | [`launch-args.md`](launch-args.md) | Design note (not implemented): the two launch-argument panes, flag ownership and the flag-validation table |
 
@@ -58,7 +58,7 @@ changing anything under `ui-svelte/`.
 |---|---|
 | `src/main.ts`, `src/App.svelte` | Entry point + root. `App.svelte` fetches `/api/mode` and renders either the dashboard shell (Sidebar + StatusRail + Router) **or** the standalone `PlaygroundApp`. |
 | `src/routes/PlaygroundApp.svelte` | Playground root: gates the app behind login (`playgroundAuth` `me`), hydrates server-backed chats/prefs, then mounts `PlaygroundShell`. |
-| `src/routes/PlaygroundShell.svelte` | Playground shell: icon side-rail (Chat / Images / Video / 3D / Speech / Transcription / Decision, hover-expand), the history drawer (`HistoryDrawer`, slides in and pushes the pane, every tab but Transcription and Decision, open state in `historyOpenStore`), logout + username, and the playground Settings modal (**General / Memory / Search / Prompt**). |
+| `src/routes/PlaygroundShell.svelte` | Playground shell: icon side-rail (Chat / Images / Video / 3D / Speech / Music / Transcription / Decision, hover-expand), the history drawer (`HistoryDrawer`, slides in and pushes the pane, every tab but Transcription and Decision, open state in `historyOpenStore`), logout + username, and the playground Settings modal (**General / Memory / Search / Prompt**). |
 | `src/routes/Login.svelte` | Playground username/password sign-in **and** sign-up (hashed; unknown users are rejected, not registered). Opens on the sign-up pane when `GET /auth/accounts` says no account exists yet. |
 | `src/routes/` | Top-level pages mounted by the router. |
 | `src/components/` | Reusable UI components (panels, modals, gauges, charts, tooltips). |
@@ -92,7 +92,7 @@ Backend communication is centralized in `src/stores/api.ts`, with shared types i
   load-plan preview; global tuning `/api/settings`; Observe `/api/kvcache` + `/api/canon`; API keys
   `listApiKeys`/`upsertApiKey`/`deleteApiKey`; self-update `versionInfo` + `/api/update`. Playground
   interfaces call the OpenAI-compatible / SD endpoints through their own `lib/*Api.ts` modules
-  (`chatApi`, `imageApi`, `audioApi`, `speechApi`, `rerankApi`, `sdApi`, `decisionApi`).
+  (`chatApi`, `imageApi`, `audioApi`, `speechApi`, `musicApi`, `rerankApi`, `sdApi`, `decisionApi`).
 - **Persistence:** `stores/persistent.ts` (`persistentStore`, localStorage) for dashboard prefs and
   tallies. Playground state is **server-backed**: `stores/chatHistory.ts`
   (`chatSessions`/`activeChatId`/`generatingChatId`, `loadChats` + debounced `PUT /api/chats`),
@@ -390,6 +390,13 @@ a time; any remote copy is stale by definition), then higher `updatedAt`, then d
 travel explicitly *and* leave a 60 s **tombstone** — naming the deletion is not enough on its own,
 because the other document's in-flight broadcast was composed before it heard and still carries the
 corpse. Tested in `lib/sessionSync.test.ts`, including that race.
+
+A merge takes a remote copy only when its `updatedAt` is **strictly** newer, so an edit that does
+not bump is invisible to the other documents and is reverted by their next PUT. That is why the
+header's rename (`PaneHeader` `onRename`, each tab's `renameThread`) bumps even though it moves the
+thread to the top of the history. It sets `titled`, which every auto-title path already honours;
+Chat's model-written title re-checks it after its request returns, since a rename can land while
+the model is still thinking. A cleared title goes back to the tab's derived one (`titled: false`).
 
 ## Conventions
 

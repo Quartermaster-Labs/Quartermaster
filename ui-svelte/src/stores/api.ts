@@ -486,6 +486,10 @@ export interface ModelOverride {
   // null/undefined => the generator reads the backend's own --list-devices and
   // picks the first discrete GPU; a negative value emits no flag at all.
   audioDevice?: number | null;
+  // audio.cpp, MiniMax Music 3 only: how the weights are stored once loaded.
+  // ""/undefined => auto (f16 on Vulkan for the quantized packages), "native",
+  // or "f16".
+  audioWeightType?: string;
   variants?: ModelVariant[];
   // Dry sampler: null/undefined => fleet default (off), true => on, false => off.
   dry?: boolean | null;
@@ -600,6 +604,9 @@ export interface ModelConfig {
    *  weights are its own format, so it and the legacy speech engines are not
    *  interchangeable even though they share a class. */
   isAudioCpp?: boolean;
+  /** Set only for an audio.cpp family that offers a weight storage choice:
+   *  what Auto resolves to on this box ("native" | "f16"). */
+  audioWeightTypeAuto?: string;
   hasOverride: boolean;
   /** UI-set advertised name (cascades to variants); "" => unrenamed, shows id. */
   displayName?: string;

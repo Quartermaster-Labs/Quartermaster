@@ -95,6 +95,30 @@ Also here: `turns_design.md` — the turn runner's design notes.
   removed the Clone and delete buttons). And listing voices no longer loads the model, which is
   surfaced as the `voice_list_offline` capability so the playground stops waiting for a running
   model before it refreshes.
+- **`/v1/tasks/run` is never exposed; the music routes are its only door** (`musicapi.go`).
+  audio.cpp's task body takes FILE PATHS (`request.audio`, and options such as `noise_file`,
+  `source_audio`), opened relative to the binary's directory. Proxied raw, that is an arbitrary
+  file read on the server. The typed routes take audio INLINE only (base64 or multipart),
+  validate it as WAV, write it to `<CacheDir>/audiocpp-tmp/in-<random>.wav` (0600, removed after
+  the request, anything older than an hour swept), and pass audio.cpp an absolute path it built
+  itself. Options go through a per-family whitelist (`musicFamilyOptions`) that names no path
+  option; an unknown key is a 400. YuE2 takes its prompt as the `style` option and reads lyrics
+  from the task's `text` when the `lyrics` option is absent, and audio.cpp's `find_option`
+  counts an EMPTY option as absent, so the route sends YuE2 **no `text` at all** (an empty
+  `lyrics` beside the prompt as text sang the style tags). No lyrics is then an empty [Lyrics]
+  section, which is NOT instrumental: YuE2 has no such mode and may still sing. It also 400s a
+  `duration`. A written score is the typed `score`
+  field, INLINE text only (64 KiB cap, generation only), mapped onto the family's own option by
+  `autogen.AudioCppMusicScore`; the option itself (`abc`) is off the whitelist so there is one
+  door, and a score with the family's skip mode (`cot=off`) is a 400 rather than silently dropped.
+  `abc_file` stays excluded: it is a path. `/v1/music/transcriptions` is the reverse direction
+  (SheetSage2, task `midi`): audio in, the ABC artifact out as `{score, format}`, and it sends no
+  prompt, seed or text, only staged audio and `max_tokens`. The seed
+  is always sent explicitly (a random u32 when the caller gave none) and echoed in `X-Seed`, so
+  every result is reproducible. Input passes through
+  byte for byte unless the family has a hard rate (HTDemucs: 44.1 kHz, `musicFamilyInputRate`),
+  which is the only case `musicwav.go` resamples; ACE-Step resamples its own input, and re-encoding
+  it here would make an edit differ from the CLI fed the same file.
 - **The config editor is `-generate`-only** — every handler 501s when `s.autogen == nil`.
 
 ## Connections

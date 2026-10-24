@@ -14,6 +14,7 @@ They live here, not in `internal/server`, because they have two call sites: the 
 | `dialguard.go` | The caller-origin rule for web search. `PublicOnly(ctx)` marks a request as untrusted, and the shared `webSearchClient` transport refuses any dial under such a context that lands on a non-public address. |
 | `searxng.go` | The single serialized gate through which **every** SearXNG query passes (agent turns AND the browser proxy): a minimum 1.5s gap between queries and a body cache keyed on (normalized base URL, query). |
 | `youtube.go` | Transcript fetching for **any** site yt-dlp handles (tool `media_transcript`), not just YouTube: `ParseMediaTarget`/`ParseVideoID`, `DlpPath` (managed yt-dlp), `GetTranscript` (exec, auto-caption VTT → ~30s paragraphs, token-budgeted truncation), `FormatTranscript`. |
+| `mediaaudio.go` | `FetchMediaAudio`: one page's best audio-only stream, downloaded as served (m4a/webm, no ffmpeg), behind the same `ParseMediaTarget` gate, capped by `MaxMediaAudioSeconds` (15 min, a yt-dlp `--match-filter`) and 64 MB. Backs `/v1/tools/media/audio`, the music playground's paste-a-link source. |
 | `youtube_browse.go` | Free-text video search (`yt-dlp ytsearchN:`), channel/playlist listing via tab URLs, comment fetching. `Video`/`Comment` types, `FormatVideos`/`FormatComments`. |
 | `hidewindow_windows.go` / `hidewindow_other.go` | `hideConsole` build-tag pair — a `-H=windowsgui` exe has no console, so yt-dlp children must not pop their own window. |
 

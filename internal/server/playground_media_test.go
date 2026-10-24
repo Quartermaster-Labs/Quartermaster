@@ -1,11 +1,16 @@
 package server
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPlayground_extractMedia(t *testing.T) {
@@ -48,6 +53,8 @@ func TestPlayground_extractMedia(t *testing.T) {
 }
 
 func TestPlayground_gcMedia(t *testing.T) {
+	defer func(g time.Duration) { mediaGCGrace = g }(mediaGCGrace)
+	mediaGCGrace = 0
 	dir := t.TempDir()
 	p := &Playground{DataDir: dir}
 
@@ -107,5 +114,78 @@ func TestPlayground_inlineMedia(t *testing.T) {
 	esc := []byte(`"/api/media/image/../../secret.png"`)
 	if got := string(p.inlineMedia("radu", esc)); strings.Contains(got, "base64,") {
 		t.Fatalf("traversal ref resolved: %s", got)
+	}
+}
+
+// A file younger than mediaGCGrace survives a GC even though no tab names it:
+// that is the window between POST /api/media and the PUT that lands its ref.
+func TestPlayground_gcMediaGrace(t *testing.T) {
+	p := &Playground{DataDir: t.TempDir()}
+	ref := string(p.extractMedia("radu", []byte(`"data:audio/wav;base64,`+base64.StdEncoding.EncodeToString([]byte("young"))+`"`)))
+	file := filepath.Join(p.mediaDir("radu"), "audio", filepath.Base(strings.Trim(ref, `"`)))
+
+	p.gcMedia("radu")
+	if _, err := os.Stat(file); err != nil {
+		t.Fatalf("young unreferenced file was collected: %v", err)
+	}
+
+	old := time.Now().Add(-mediaGCGrace - time.Minute)
+	os.Chtimes(file, old, old)
+	p.gcMedia("radu")
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatalf("old unreferenced file survived GC: %v", err)
+	}
+}
+
+func TestPlayground_mediaUpload(t *testing.T) {
+	p := &Playground{DataDir: t.TempDir()}
+	s := &Server{playground: p}
+	post := func(ct string, body []byte, cookie bool) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/api/media", bytes.NewReader(body))
+		r.Header.Set("Content-Type", ct)
+		if cookie {
+			r.AddCookie(&http.Cookie{Name: pgCookie, Value: p.cookieValue("radu")})
+		}
+		w := httptest.NewRecorder()
+		s.handlePlaygroundMediaUpload(w, r)
+		return w
+	}
+
+	if w := post("audio/wav", []byte("RIFF"), false); w.Code != http.StatusUnauthorized {
+		t.Fatalf("no cookie: got %d, want 401", w.Code)
+	}
+	if w := post("application/json", []byte("{}"), true); w.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("json body: got %d, want 415", w.Code)
+	}
+	if w := post("audio/wav", nil, true); w.Code != http.StatusBadRequest {
+		t.Fatalf("empty body: got %d, want 400", w.Code)
+	}
+
+	w := post("audio/wav; codecs=1", []byte("RIFF....song"), true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("upload: got %d: %s", w.Code, w.Body.String())
+	}
+	var got struct{ URL string }
+	json.Unmarshal(w.Body.Bytes(), &got)
+	// The same ref extractMedia writes for the same bytes, so an upload and an
+	// inline save of one clip share a file.
+	inline := strings.Trim(string(p.extractMedia("radu", []byte(`"data:audio/wav;base64,`+base64.StdEncoding.EncodeToString([]byte("RIFF....song"))+`"`))), `"`)
+	if got.URL != inline {
+		t.Fatalf("upload ref %q, extractMedia ref %q", got.URL, inline)
+	}
+	data, err := os.ReadFile(filepath.Join(p.mediaDir("radu"), filepath.FromSlash(strings.TrimPrefix(got.URL, "/api/media/"))))
+	if err != nil || string(data) != "RIFF....song" {
+		t.Fatalf("stored bytes %q, err %v", data, err)
+	}
+
+	// A re-upload refreshes the mtime, which is what holds it inside the grace.
+	file := filepath.Join(p.mediaDir("radu"), filepath.FromSlash(strings.TrimPrefix(got.URL, "/api/media/")))
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(file, old, old)
+	if w := post("audio/wav", []byte("RIFF....song"), true); w.Code != http.StatusOK {
+		t.Fatalf("re-upload: got %d", w.Code)
+	}
+	if info, _ := os.Stat(file); time.Since(info.ModTime()) > time.Minute {
+		t.Fatalf("re-upload did not refresh mtime: %v", info.ModTime())
 	}
 }

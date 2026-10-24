@@ -76,7 +76,7 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 	}
 
 	// Build capabilities map only if there's something to put in it.
-	if hasIn || hasOut || caps.Tools || caps.Reranker || caps.Embedding || caps.Decision || caps.Segmentation || caps.VoiceClone || len(caps.ReasoningEffort) > 0 {
+	if hasIn || hasOut || caps.Tools || caps.Reranker || caps.Embedding || caps.Decision || caps.Segmentation || caps.VoiceClone || caps.Music || caps.MusicEdit || caps.MusicScore != "" || caps.MusicTranscribe != "" || caps.Separation || len(caps.ReasoningEffort) > 0 {
 		capsMap = make(map[string]any)
 	}
 
@@ -134,6 +134,25 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 
 	if caps.Segmentation {
 		capsMap["segmentation"] = true
+	}
+
+	// Music and separation are flags, not In/Out pairs: text->audio already
+	// means audio_speech, and a client that found a music model under that
+	// flag would POST /v1/audio/speech to a process that has no such route.
+	if caps.Music {
+		capsMap["music_generation"] = true
+	}
+	if caps.MusicEdit {
+		capsMap["music_edit"] = true
+	}
+	if caps.MusicScore != "" {
+		capsMap["music_score"] = caps.MusicScore
+	}
+	if caps.Separation {
+		capsMap["audio_separation"] = true
+	}
+	if caps.MusicTranscribe != "" {
+		capsMap["music_transcription"] = caps.MusicTranscribe
 	}
 
 	// decision_type names the head (kev, laya, lfm2-d1, ...): what it accepts

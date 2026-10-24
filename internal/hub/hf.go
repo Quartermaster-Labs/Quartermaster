@@ -198,6 +198,9 @@ func searchFilterSets(kind string) [][]string {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "video":
 		return [][]string{{"text-to-video"}, {"image-to-video"}}
+	case "music":
+		// Generators are text-to-audio, separators audio-to-audio.
+		return [][]string{{"gguf", "text-to-audio"}, {"gguf", "audio-to-audio"}}
 	case "decision":
 		return [][]string{{"gguf", "decision-model"}, {"gguf", "typed-decisions"}, {"gguf", "system-one"}}
 	}
@@ -214,6 +217,9 @@ func searchFilters(kind string) []string {
 		return []string{"gguf", "text-to-image"}
 	case "tts":
 		return []string{"gguf", "text-to-speech"}
+	case "music":
+		// The primary of searchFilterSets' two music queries.
+		return []string{"gguf", "text-to-audio"}
 	case "transcribe":
 		return []string{"gguf", "automatic-speech-recognition"}
 	case "embed":

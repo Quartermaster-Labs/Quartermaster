@@ -326,7 +326,19 @@ const hashCacheSuffix = ".modelhash"
 // n_head x ub^2 score matrix for whole-batch types) instead of a flat pad.
 // v102: a non-causal classifier with no decision.type or pooling_type is
 // skipped instead of emitted as a chat LLM.
-const genVersion = "v102"
+// v104: ace_step models carry sessionOptions ace_step.mem_saver, which makes a
+// seed reproduce byte for byte regardless of what the process rendered before.
+// v105: MiniMax Music 3 session options carry the family prefix audio.cpp
+// looks them up by; bare keys were ignored and the server wanted q4_0 files.
+// v106: the 24 audio.cpp families upstream added since the table was written
+// are classified (TTS/ASR emitted, the rest skipped by name), and YuE2 is
+// emitted as a folder model with its VAE companion.
+// v107: on a Vulkan audio.cpp build MiniMax Music 3's q8_0/q4_0 quants load
+// with weight_type f16 (native rendered a hiss) and are priced at that size.
+// v109: (reverted) a full-precision YuE2 took the f32 VAE; it cannot decode on
+// Vulkan (one 3.6 GB allocation over the device limit), so f16 stays first.
+// v110: SheetSage2 is emitted as task "midi" with musicTranscribe: abc.
+const genVersion = "v111"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

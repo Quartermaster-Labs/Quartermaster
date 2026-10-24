@@ -45,6 +45,9 @@ type tensorScan struct {
 	// PRESENCE still has to be visible to quantLabelFrom, which reports an
 	// unweighable file as unlabelled rather than as the type it could measure.
 	typeBytes map[uint32]int64
+
+	// paramCount is the element count summed over every tensor (Metadata.ParamCount).
+	paramCount int64
 }
 
 // ggmlTypeName spells a ggml type id the way llama-quantize names it. Ids are

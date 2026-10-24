@@ -44,6 +44,7 @@ and embedded with `go:embed`, so these ship inside the binary as compiled assets
 
 | Package | Version | License |
 | --- | --- | --- |
+| abcjs | 6.7.2 | MIT |
 | chart.js | 4.5.1 | MIT |
 | highlight.js | 11.11.1 | BSD-3-Clause |
 | katex | 0.16.47 | MIT |

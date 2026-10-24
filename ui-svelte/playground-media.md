@@ -1,4 +1,4 @@
-# ui-svelte — playground image, video & speech studios
+# ui-svelte — playground image, video, speech & music studios
 
 `src/components/playground/`. The chat surface is in
 [`playground-chat.md`](playground-chat.md).
@@ -125,6 +125,104 @@ would be stitched), and a forced-aligner model would evict the TTS model on one 
 punctuation pause, spreads them over the voiced part of the decoded clip, and snaps each boundary
 to the nearest real pause, re-estimating the rest from where it landed so drift does not
 accumulate. Sentence-level only: a length model is not good enough for words.
+
+## `MusicInterface.svelte`
+
+The Speech studio's layout (settings rail left, takes grid right, composer under it) with four
+modes on a segmented control, three of them one per route family in `lib/musicApi.ts`:
+
+- **Create**: text to music (`/v1/music/generations`, ACE-Step, MiniMax Music 3 and YuE2).
+- **Edit**: repaint a time window, complete, or cover an existing clip (`/v1/music/edits`,
+  ACE-Step only). The repaint window is dragged across a bar or typed in seconds.
+- **Stems** (mode key `stems`): a source clip, uploaded or pulled from a pasted link
+  (`fetchLinkAudio` -> `/v1/tools/media/audio`, yt-dlp, decoded by `toWav` like a file), split
+  into four stems (`/v1/audio/separations`, HTDemucs). No prompt.
+- **Scores** (mode key `scores`): the score library, below. Needs no model, so it is always
+  offered, and the tab renders with no music model at all once the library has a score.
+
+**A reference song is not a mode, it is an attachment.** While the picked generator advertises
+`music_score` (YuE2), the composer has a **+** menu: upload a song, paste a link, or load a
+`.abc` file. A song is transcribed in the background with the first `music_transcription` model
+(SheetSage2, `/v1/music/transcriptions`), no Run press, straight into the score
+(`playground-music-score`) and credited to its recording (`playground-music-score-origin`, kept
+with a copy of the score so an edited score stops claiming the origin). It is not a take; the
+score and its origin are copied into the song that uses it. The score floats above the composer
+as a chip: click to view and edit it, the link icon opens the original, the info icon carries the
+non-commercial disclaimer, and X drops it (aborting a read in flight). Generate waits while a read
+runs, and a finished read turns Planning `off` into `melody`, since YuE2 400s a score without one.
+The + exists **only for a score-taking generator**: for any other model a transcription would
+swap SheetSage into VRAM and the generator out for a result nothing reads. A take's menu offers
+"Use as reference" through the same path. Older transcription takes still render, with
+"Use this score".
+
+Each mode keeps its **own** model pick (`playground-music-model` / `-edit-model` /
+`-stems-model`), filtered by capability (`music_generation`, `music_edit`, `audio_separation`),
+so switching modes can never leave a model the route would refuse. A mode with no model is
+hidden. `playground-music-model` is also what the dashboard's launch link writes, so an effect
+moves a separator that lands there into the stems pick and switches mode.
+
+**Every audio field on a take is a `/api/media` ref.** Results are uploaded as they land
+(`uploadMedia`) and the thread holds refs only; see `internal/server/playground.md` for why and
+for the GC grace that covers the gap. A picked source file is uploaded at RUN time, not pick
+time, so a user who takes longer than the grace before pressing play does not lose it. A source
+taken from a take's menu ("Edit this take", "Split into stems") is already a ref.
+
+The source is converted to WAV in the browser (`toWav`): a WAV passes through byte for byte,
+anything else is decoded and re-encoded as stereo PCM16 (`lib/wav.ts` is mono, which suits speech
+and flattens a song). MiniMax is recognised by model id (`/minimax/i`) to require lyrics and hide
+ACE-Step's options, YuE2 (`/yue/i`) to hide them and the Length field (its song is as long as
+its lyrics, and the route 400s a duration) and to offer its own Planning option (`cot`,
+`playground-music-cot`); the server's family check is the backstop. Edits over ~24 s fail only on AMD
+Vulkan (the VAE encoder's 2 GB buffer), so the client does not block them and shows the server's
+message instead.
+
+Every generated take has a **References** button (scroll icon) opening a popup of what went
+into it: style/instruction, source clip and its page, lyrics, score and where it was extracted
+from, stems, and the settings (`settingsRows`). Escape or a backdrop click closes it.
+
+A take that starts (send, or "New take, new seed") pauses every `<audio>` under the tab's root
+(`stopPlayback`), so the run is not talked over by the take it is replacing.
+
+### The score library
+
+`stores/scoreLibrary.ts` (`GET`/`PUT /api/musicscores`, a per-user blob kept apart from the
+threads, so deleting a thread never takes its scores). `addScore` is called wherever a score
+appears: a SheetSage2 read through the composer's +, an older transcription take, a `.abc` loaded
+into the composer, and the Scores mode's own Upload (several files at once, 64 KiB each, the
+server's score cap). It dedupes on the normalised text, so re-reading the same song bumps the
+entry instead of adding a twin. `kind` records how it arrived; `origin` credits the recording.
+
+Scores mode is `ScoreList.svelte` in the rail and `ScoreViewer.svelte` on the right. The same
+`ScoreList` is the composer's **+ -> From the library…** picker (offered while the generator's
+`music_score` is `abc`), whose pick goes through `useLibraryScore`, the same path as a fresh read.
+The viewer's "Use in Create" does the same.
+
+`ScoreViewer` imports `lib/abcScore.ts` lazily (abcjs is ~400 KB) and:
+
+- engraves with `abcjs.renderAbc` (`foregroundColor: currentColor`, so it follows the theme);
+- plays through `lib/scorePlayer.ts`, a WebAudio lookahead scheduler over `noteEvents`, NOT
+  abcjs's synth, which fetches its soundfont from a public CDN. The sounding notes are lit via
+  `getElementFromChar(startChar).abselem.elemset`. "Chords" adds a pad under the chord symbols;
+- draws a playhead: an SVG `<line>` appended to the engraved `<svg>` (viewBox units, so it scales
+  with `responsive: "resize"`). Times come from `timeline(model)` (our clock, the one the player
+  runs on, not abcjs's `setupEvents`), places from the bbox of each onset's elements, spanning
+  its `.abcjs-staff-wrapper` system, interpolated between onsets. A click maps back through
+  `getScreenCTM().inverse()` to a time and seeks; Pause keeps the position, SkipBack rewinds;
+- edits the ABC in place (saved debounced) and renames on blur;
+- exports `.abc`, `.mid` (`abcjs.synth.getMidiFile`) and `.musicxml` (`toMusicXML`).
+
+`lib/abcScore.ts` walks abcjs's parse, never the text. Every `V:` voice is a MusicXML part named
+from its `name=`; `Z<n>` becomes N measure rests; `% name` comment lines become rehearsal marks on
+the first part (domina-music's `abc_to_musicxml.py` did the same); alterations come from a written
+accidental, then the measure's memory, then the key; triplets carry `time-modification`, and a
+length no single note spells is split into tied notes. Parts are padded to one length, since
+MuseScore wants that. abcjs prints `#` in a chord name as `♯`; `parseChordName` reads both.
+`abcScore.test.ts` pins it on the SheetSage2 shape, including "every measure sums to the meter".
+
+Takes are a library, not a conversation: a new take, "New take, new seed" included, is always
+appended and nothing after it is dropped. `execute` reads the stored take rather than the form, so
+a regenerate replays exactly that take's settings. The seed shown on a card is the one the server
+**echoed** (`X-Seed`), so a random-seed take can be pinned and reproduced; clicking it pins it.
 
 ## `MaskEditor.svelte`
 

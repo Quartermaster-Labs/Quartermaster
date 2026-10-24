@@ -43,6 +43,23 @@ type ModelCapConfig struct {
 	// fixed-voice-pack engine like TTS.cpp/Kokoro serves speech but has no
 	// endpoint to clone with, and offering the UI for it produces a 404 at best.
 	VoiceClone bool `yaml:"voiceClone"`
+	// Music marks an audio.cpp music generator (ACE-Step, MiniMax Music): it
+	// answers /v1/music/generations, never /v1/audio/speech, so it must not
+	// borrow the speech capability a text->audio In/Out pair would imply.
+	// MusicEdit adds /v1/music/edits (repaint / complete / cover), which only
+	// some generators implement. Separation marks a stem splitter (HTDemucs)
+	// answering /v1/audio/separations.
+	Music      bool `yaml:"music"`
+	MusicEdit  bool `yaml:"musicEdit"`
+	Separation bool `yaml:"separation"`
+	// MusicScore names the score notation a music generator can be conditioned
+	// on ("abc" for YuE2); empty = none. Sent as the generation route's typed
+	// `score` field.
+	MusicScore string `yaml:"musicScore"`
+	// MusicTranscribe names the score notation a transcriber writes from a
+	// recording ("abc" for SheetSage2); empty = not a transcriber. Answered on
+	// /v1/music/transcriptions.
+	MusicTranscribe string `yaml:"musicTranscribe"`
 	// ReasoningEffort lists the reasoning-effort levels this model's chat
 	// template accepts (Qwen 3.8: xhigh/medium/low), lowest-cost value LAST as
 	// the template declares them. Non-empty is the signal that an incoming
@@ -56,7 +73,7 @@ type ModelCapConfig struct {
 
 // Empty returns true when all fields are at their zero values.
 func (c ModelCapConfig) Empty() bool {
-	return len(c.In) == 0 && len(c.Out) == 0 && !c.Tools && !c.Reranker && !c.Embedding && !c.Segmentation && !c.Decision && c.DecisionType == "" && !c.VoiceClone && len(c.ReasoningEffort) == 0 && c.Context == 0
+	return len(c.In) == 0 && len(c.Out) == 0 && !c.Tools && !c.Reranker && !c.Embedding && !c.Segmentation && !c.Decision && c.DecisionType == "" && !c.VoiceClone && !c.Music && !c.MusicEdit && !c.Separation && c.MusicScore == "" && c.MusicTranscribe == "" && len(c.ReasoningEffort) == 0 && c.Context == 0
 }
 
 // Validate checks that all modality values are recognized and context is
@@ -208,9 +225,16 @@ type AudioCppConfig struct {
 	Family string `yaml:"family"`
 	// Path is the gguf (or model directory) the server loads.
 	Path string `yaml:"path"`
-	// Task is "tts" or "asr" - which of the two surfaces this process serves.
-	// Blank lets audio.cpp apply its own default ("tts").
+	// Task selects which surface this process serves: "tts", "asr", "gen"
+	// (music generation), "sep" (source separation) or "midi" (score
+	// transcription). Blank lets audio.cpp
+	// apply its own default ("tts").
 	Task string `yaml:"task"`
+	// SessionOptions are audio.cpp's per-model session_options, passed through
+	// verbatim. A directory model whose package holds several quants
+	// (MiniMax Music 3) is told which component files to load here, since its
+	// built-in defaults name a quant that may not be on disk.
+	SessionOptions map[string]string `yaml:"sessionOptions"`
 }
 
 // Empty reports whether this model carries no audio.cpp block at all. Family

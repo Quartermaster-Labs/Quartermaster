@@ -43,6 +43,11 @@ export async function refreshInferenceKey(): Promise<void> {
   }
 }
 
+// Logout: the key was handed out for this user's session, so it goes with it.
+export function clearInferenceKey(): void {
+  key = null;
+}
+
 // Merge the bearer auth header into a headers object when a key is cached.
 export function inferenceHeaders(base: Record<string, string> = {}): Record<string, string> {
   return key ? { ...base, Authorization: `Bearer ${key}` } : base;

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net/http"
 	"testing"
 	"time"
 
@@ -782,39 +781,56 @@ func newFIFOWithLimit(t *testing.T, model string, limit int) (*FIFO, *fakeEffect
 	return s, eff
 }
 
-// TestFIFO_ConcurrencyLimit_RejectsOverLimit verifies that a request arriving
-// while the model is at capacity gets an error grant instead of being served,
-// and that a new request succeeds once an in-flight one completes.
-func TestFIFO_ConcurrencyLimit_RejectsOverLimit(t *testing.T) {
+// TestFIFO_ConcurrencyLimit_QueuesOverLimit verifies that a request arriving
+// while the model is at capacity is queued rather than refused, and is served
+// the moment an in-flight request completes. audio.cpp runs with limit 1, so a
+// second music render used to come back as a 429 instead of waiting its turn.
+func TestFIFO_ConcurrencyLimit_QueuesOverLimit(t *testing.T) {
 	s, eff := newFIFOWithLimit(t, "a", 1)
 
-	// First request: served (inFlight 0 → 1).
+	// First request: served (inFlight 0 -> 1).
 	s.OnRequest(req("a"))
 	if got := eff.served("a"); got != 1 {
 		t.Fatalf("served(a)=%d want 1", got)
 	}
 
-	// Second request while slot is occupied: rejected with HTTPError 429.
+	// Second request while the slot is occupied: queued, not errored.
 	s.OnRequest(req("a"))
-	if got := eff.errored("a"); got != 1 {
-		t.Fatalf("errored(a)=%d want 1 (over-limit)", got)
+	if got := eff.errored("a"); got != 0 {
+		t.Fatalf("errored(a)=%d want 0 (over-limit must queue)", got)
 	}
-	var httpErr shared.HTTPError
-	if !errors.As(eff.grants[len(eff.grants)-1].err, &httpErr) {
-		t.Fatalf("err=%v want HTTPError", eff.grants[len(eff.grants)-1].err)
-	}
-	if httpErr.StatusCode() != http.StatusTooManyRequests {
-		t.Fatalf("StatusCode()=%d want 429", httpErr.StatusCode())
-	}
-	if httpErr.Header().Get("Retry-After") == "" {
-		t.Fatal("missing Retry-After header")
+	if len(s.queued) != 1 {
+		t.Fatalf("queue len=%d want 1", len(s.queued))
 	}
 
-	// After the in-flight request finishes, a new request succeeds.
+	// The in-flight request finishes: the queued one is served from the queue.
 	s.OnServeDone(ServeDoneEvent{ModelID: "a"})
-	s.OnRequest(req("a"))
 	if got := eff.served("a"); got != 2 {
 		t.Fatalf("served(a)=%d want 2 after drain", got)
+	}
+	if len(s.queued) != 0 {
+		t.Fatalf("queue len=%d want 0 after drain", len(s.queued))
+	}
+}
+
+// TestFIFO_ConcurrencyLimit_SlotOpensBelowLimit verifies a queued request is
+// granted when ONE slot frees, not only once the model goes fully idle.
+func TestFIFO_ConcurrencyLimit_SlotOpensBelowLimit(t *testing.T) {
+	s, eff := newFIFOWithLimit(t, "a", 2)
+
+	s.OnRequest(req("a"))
+	s.OnRequest(req("a"))
+	s.OnRequest(req("a")) // queued
+	if got := eff.served("a"); got != 2 {
+		t.Fatalf("served(a)=%d want 2", got)
+	}
+
+	s.OnServeDone(ServeDoneEvent{ModelID: "a"}) // 2 -> 1 in flight
+	if got := eff.served("a"); got != 3 {
+		t.Fatalf("served(a)=%d want 3 (slot freed below the limit)", got)
+	}
+	if got := s.inFlight["a"]; got != 2 {
+		t.Fatalf("inFlight(a)=%d want 2", got)
 	}
 }
 
@@ -833,10 +849,13 @@ func TestFIFO_ConcurrencyLimit_DefaultIsTen(t *testing.T) {
 		t.Fatalf("served(a)=%d want 10 (default limit)", got)
 	}
 
-	// 11th request is rejected.
+	// 11th request waits.
 	s.OnRequest(req("a"))
-	if got := eff.errored("a"); got != 1 {
-		t.Fatalf("errored(a)=%d want 1 (over default limit)", got)
+	if got := eff.served("a"); got != 10 {
+		t.Fatalf("served(a)=%d want 10 (over default limit)", got)
+	}
+	if len(s.queued) != 1 {
+		t.Fatalf("queue len=%d want 1", len(s.queued))
 	}
 }
 
@@ -852,14 +871,14 @@ func TestFIFO_ConcurrencyLimit_CustomLimit(t *testing.T) {
 	if got := eff.served("a"); got != 2 {
 		t.Fatalf("served(a)=%d want 2 (custom limit)", got)
 	}
-	if got := eff.errored("a"); got != 1 {
-		t.Fatalf("errored(a)=%d want 1 (over custom limit)", got)
+	if len(s.queued) != 1 {
+		t.Fatalf("queue len=%d want 1 (over custom limit)", len(s.queued))
 	}
 }
 
 // TestFIFO_ConcurrencyLimit_SwapWaiters verifies that when more swap waiters
-// exist than the concurrency limit, excess waiters are rejected on swap
-// completion rather than exceeding the limit.
+// exist than the concurrency limit, excess waiters are queued on swap
+// completion rather than exceeding the limit, and served as slots free.
 func TestFIFO_ConcurrencyLimit_SwapWaiters(t *testing.T) {
 	eff := newFakeEffects()
 	eff.states["a"] = process.StateStopped
@@ -877,14 +896,22 @@ func TestFIFO_ConcurrencyLimit_SwapWaiters(t *testing.T) {
 		t.Fatalf("StartSwap(a)=%d want 1", got)
 	}
 
-	// Swap completes: two served (limit), one rejected.
+	// Swap completes: two served (limit), one queued.
 	eff.states["a"] = process.StateReady
 	s.OnSwapDone(SwapDone{ModelID: "a"})
 
 	if got := eff.served("a"); got != 2 {
 		t.Fatalf("served(a)=%d want 2 (limit on swap completion)", got)
 	}
-	if got := eff.errored("a"); got != 1 {
-		t.Fatalf("errored(a)=%d want 1 (excess waiter rejected)", got)
+	if got := eff.errored("a"); got != 0 {
+		t.Fatalf("errored(a)=%d want 0 (excess waiter must queue)", got)
+	}
+	if len(s.queued) != 1 {
+		t.Fatalf("queue len=%d want 1", len(s.queued))
+	}
+
+	s.OnServeDone(ServeDoneEvent{ModelID: "a"})
+	if got := eff.served("a"); got != 3 {
+		t.Fatalf("served(a)=%d want 3 after a slot frees", got)
 	}
 }

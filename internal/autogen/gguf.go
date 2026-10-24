@@ -62,6 +62,12 @@ type Metadata struct {
 	// whoever-uploaded-it's opinion. See quantLabelFrom.
 	QuantLabel string
 
+	// ParamCount is the total element count across every tensor, whatever its
+	// stored type. It prices a load that converts the weights on the way in
+	// (audio.cpp's weight_type: f16 is ParamCount * 2 bytes), which the file
+	// size alone cannot tell you for a quantized file.
+	ParamCount int64
+
 	// BaseName / SizeLabel / FineTune / GeneralName are the identity KVs, raw
 	// and unjudged (general.basename, .size_label, .finetune, .name). They are
 	// what a model IS according to whoever converted it, which is the only
@@ -1125,6 +1131,7 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 		SsmStateSize:      deref(ssmStateSize),
 		VocabSize:         vocab,
 		QuantLabel:        quantLabel,
+		ParamCount:        scan.paramCount,
 		BaseName:          baseName,
 		SizeLabel:         sizeLabel,
 		FineTune:          fineTune,
@@ -1180,8 +1187,9 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 	var embedWidth int64
 	condDims := map[string]int64{}
 	typeBytes := map[uint32]int64{}
+	var paramCount int64
 	out := func() tensorScan {
-		return tensorScan{expertShare: share, vocabElems: vocabElems, diffKind: diffKind, bakedEnc: bakedEnc, condHidden: condHiddenFrom(condDims), videoKind: videoKind, hasAudioOut: sawAudioPatch, embedWidth: embedWidth, typeBytes: typeBytes}
+		return tensorScan{expertShare: share, vocabElems: vocabElems, diffKind: diffKind, bakedEnc: bakedEnc, condHidden: condHiddenFrom(condDims), videoKind: videoKind, hasAudioOut: sawAudioPatch, embedWidth: embedWidth, typeBytes: typeBytes, paramCount: paramCount}
 	}
 	for i := uint64(0); i < tensorCount; i++ {
 		name, err := r.str()
@@ -1204,6 +1212,7 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 			}
 			elems *= int64(dim)
 		}
+		paramCount += elems
 		typ, err := r.u32()
 		if err != nil {
 			return out(), err

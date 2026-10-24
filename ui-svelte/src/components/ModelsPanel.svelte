@@ -9,7 +9,7 @@
   import { playgroundPort } from "../stores/playgroundAuth";
   import { isNative } from "../lib/native";
   import { openTab } from "../stores/appTabs";
-  import { modelCategory, MODEL_CATEGORIES, playgroundTarget, type ModelCategory } from "../lib/modelUtils";
+  import { modelCategory, MODEL_CATEGORIES, MODEL_GROUPS, modelGroupOf, playgroundTarget, type ModelCategory, type ModelGroup } from "../lib/modelUtils";
   import { nextSort, fmtGB, type SortDir, type SortKey, type StateFilter } from "../lib/modelTable";
   import type { Model } from "../lib/types";
   import ModelConfigModal from "./ModelConfigModal.svelte";
@@ -325,6 +325,31 @@
     return local.filter((m) => modelCategory(m) === id && ($showUnlistedStore || !m.unlisted)).length;
   }
 
+  // Two levels: a group tab (Text / Visual / Audio) over a chip row of its
+  // categories. `tab` stays the leaf category, so deep links, the folder pickers
+  // and LORA_TABS are untouched; the group is derived from it. Empty groups and
+  // chips are hidden, except the one the user is on (a deep link to an empty
+  // category must still say where it is), and with no models anywhere every
+  // group shows, since a bar of nothing explains nothing.
+  const group = $derived(modelGroupOf(tab));
+  const anyModels = $derived(MODEL_CATEGORIES.some((c) => tabCount(c.id) > 0));
+  const groupCount = (g: (typeof MODEL_GROUPS)[number]) => g.categories.reduce((n, c) => n + tabCount(c), 0);
+  const visibleGroups = $derived(MODEL_GROUPS.filter((g) => !anyModels || g.id === group || groupCount(g) > 0));
+  const visibleChips = $derived(
+    (MODEL_GROUPS.find((g) => g.id === group)?.categories ?? []).filter((c) => !anyModels || c === tab || tabCount(c) > 0),
+  );
+  const catLabel = (c: ModelCategory) => MODEL_CATEGORIES.find((x) => x.id === c)?.label ?? c;
+  // Coming back to a group returns to the category last used in it.
+  const lastInGroup: Partial<Record<ModelGroup, ModelCategory>> = {};
+  $effect(() => {
+    lastInGroup[modelGroupOf(tab)] = tab;
+  });
+  function pickGroup(g: (typeof MODEL_GROUPS)[number]): void {
+    if (g.id === group) return;
+    const last = lastInGroup[g.id];
+    tab = last && tabCount(last) > 0 ? last : (g.categories.find((c) => tabCount(c) > 0) ?? g.categories[0]);
+  }
+
   let peersByPeerId = $derived(
     peers.reduce(
       (acc, m) => {
@@ -340,7 +365,8 @@
 <!-- Full-bleed page: the panel IS the page background, so the toolbar rule and
      the table both span edge to edge and only their contents are inset. -->
 <div class="flex flex-col h-full">
-  <!-- One toolbar: category tabs left, table-wide controls right. min-h-10 is the
+  <!-- One toolbar: group tabs left (their categories are the chip row under
+       it), table-wide controls right. min-h-10 is the
        app's row unit - a sidebar item and the status rail are both h-10, so every
        page's first row lands on the same line as the chrome beside it. min-, not
        fixed: the tabs may wrap, and a hard height would clip the second line.
@@ -350,15 +376,15 @@
        and the controls fold into a "..." menu instead of taking a row of their own. -->
   <div bind:this={barEl} class="flex items-stretch gap-x-1 px-3 min-h-10 border-b border-card-border shrink-0">
     <div bind:this={tabsEl} class="flex flex-wrap items-stretch gap-x-1 gap-y-1 min-w-0">
-    {#each MODEL_CATEGORIES as c (c.id)}
+    {#each visibleGroups as g (g.id)}
       <button
-        class="inline-flex items-center px-3 -mb-px border-b-2 font-mono text-xs uppercase tracking-wide transition-colors {tab === c.id
+        class="inline-flex items-center px-3 -mb-px border-b-2 font-mono text-xs uppercase tracking-wide transition-colors {group === g.id
           ? 'border-primary text-txtmain'
           : 'border-transparent text-txtsecondary hover:text-txtmain'}"
-        onclick={() => (tab = c.id)}
+        onclick={() => pickGroup(g)}
       >
-        {c.label}
-        <span class="ml-1.5 tabular-nums text-[0.65rem] text-txtsecondary">{tabCount(c.id)}</span>
+        {g.label}
+        <span class="ml-1.5 tabular-nums text-[0.65rem] text-txtsecondary">{groupCount(g)}</span>
       </button>
     {/each}
     </div>
@@ -501,6 +527,22 @@
         </button>
       {/if}
     </div>
+  </div>
+
+  <!-- The chosen group's categories. Pills rather than a second underline row,
+       so the two levels never read as one bar that wrapped. -->
+  <div class="flex flex-wrap items-center gap-1.5 px-3 py-1.5 min-h-9 border-b border-card-border shrink-0">
+    {#each visibleChips as c (c)}
+      <button
+        class="inline-flex items-center px-2.5 py-0.5 rounded-full border font-mono text-[0.65rem] uppercase tracking-wide transition-colors {tab === c
+          ? 'border-primary bg-primary/15 text-txtmain'
+          : 'border-card-border text-txtsecondary hover:text-txtmain hover:bg-secondary/60'}"
+        onclick={() => (tab = c)}
+      >
+        {catLabel(c)}
+        <span class="ml-1.5 tabular-nums text-txtsecondary">{tabCount(c)}</span>
+      </button>
+    {/each}
   </div>
 
   <ModelsTable

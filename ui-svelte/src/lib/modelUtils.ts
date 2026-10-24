@@ -16,7 +16,7 @@ export function prettifyModelName(s: string): string {
     .join(" ");
 }
 
-export type ModelCategory = "llm" | "image" | "video" | "3d" | "segment" | "tts" | "transcribe" | "embed" | "decision";
+export type ModelCategory = "llm" | "image" | "video" | "3d" | "segment" | "music" | "tts" | "transcribe" | "embed" | "decision";
 
 // Sub-menu order under the Models tab. LLM is the catch-all default.
 export const MODEL_CATEGORIES: { id: ModelCategory; label: string }[] = [
@@ -25,11 +25,27 @@ export const MODEL_CATEGORIES: { id: ModelCategory; label: string }[] = [
   { id: "video", label: "Video" },
   { id: "3d", label: "3D" },
   { id: "segment", label: "Segment" },
+  { id: "music", label: "Music" },
   { id: "tts", label: "TTS" },
   { id: "transcribe", label: "Transcribe" },
   { id: "embed", label: "Embed" },
   { id: "decision", label: "Decision" },
 ];
+
+// The Models page's top tabs: categories grouped by what they work on, so the
+// bar stays three tabs however many categories exist. Every category belongs to
+// exactly one group (a test pins that), and the group's leaves are listed in
+// MODEL_CATEGORIES order so the sub-chips read the same as the old flat tabs.
+export type ModelGroup = "text" | "visual" | "audio";
+export const MODEL_GROUPS: { id: ModelGroup; label: string; categories: ModelCategory[] }[] = [
+  { id: "text", label: "Text", categories: ["llm", "embed", "decision"] },
+  { id: "visual", label: "Visual", categories: ["image", "video", "3d", "segment"] },
+  { id: "audio", label: "Audio", categories: ["music", "tts", "transcribe"] },
+];
+
+export function modelGroupOf(c: ModelCategory): ModelGroup {
+  return MODEL_GROUPS.find((g) => g.categories.includes(c))?.id ?? "text";
+}
 
 // Bucket a model by its declared capabilities. Anything that isn't clearly an
 // image/audio/embedding model falls through to "llm". Segmentation is checked
@@ -45,6 +61,9 @@ export function modelCategory(m: Model): ModelCategory {
   // job API, so bucketing it as "image" would put it in the wrong tab.
   if (c?.video_generation) return "video";
   if (c?.image_generation || c?.image_to_image) return "image";
+  // Before tts: music and separation models are audio.cpp models like the
+  // speech ones, but answer only on /v1/music/* and /v1/audio/separations.
+  if (c?.music_generation || c?.music_edit || c?.audio_separation || c?.music_transcription) return "music";
   if (c?.audio_speech) return "tts";
   if (c?.audio_transcriptions) return "transcribe";
   // Before embeddings and the llm fallback: a decision model is a llama-server model
@@ -71,14 +90,20 @@ export function largestModel(ms: Model[]): Model | undefined {
   return ms.slice().sort((a, b) => modelWeightGB(b) - modelWeightGB(a) || a.id.localeCompare(b.id))[0];
 }
 
+// A capability is on when it is true, or a non-empty string naming a format
+// (music_score: "abc", music_transcription: "abc").
+function capOn(v: unknown): boolean {
+  return v === true || (typeof v === "string" && v !== "");
+}
+
 export function matchesCapabilities(model: Model, required: string[], matchAny = false): boolean {
   if (!required.length) return true;
   if (!model.capabilities) return false;
   const caps = model.capabilities as Record<string, boolean>;
   if (matchAny) {
-    return required.some((cap) => caps[cap] === true);
+    return required.some((cap) => capOn(caps[cap]));
   }
-  return required.every((cap) => caps[cap] === true);
+  return required.every((cap) => capOn(caps[cap]));
 }
 
 export function groupModels(models: Model[], capabilities?: string[], matchAny = false): GroupedModels {
@@ -127,6 +152,7 @@ const PLAYGROUND_TABS: Partial<Record<ModelCategory, { tab: string; label: strin
   video: { tab: "video", label: "Generate" },
   "3d": { tab: "3d", label: "Generate" },
   tts: { tab: "speech", label: "Speak" },
+  music: { tab: "music", label: "Compose" },
   transcribe: { tab: "audio", label: "Transcribe" },
   decision: { tab: "decision", label: "Decide" },
 };

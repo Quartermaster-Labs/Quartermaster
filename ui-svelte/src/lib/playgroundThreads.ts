@@ -1,8 +1,9 @@
 import { get } from "svelte/store";
 import { chatSessions, activeChatId, newChatId, type ChatSession } from "../stores/chatHistory";
 import { speechSessions, activeSpeechChatId, newSpeechChatId, type SpeechSession } from "../stores/speechHistory";
+import { musicSessions, activeMusicChatId, newMusicChatId, type MusicSession } from "../stores/musicHistory";
 
-// "New thread" for the Chat and Speech panes. Pure store ops: each interface
+// "New thread" for the Chat, Speech and Music panes. Pure store ops: each interface
 // reacts to its active id, loading/persisting the working state itself. A blank
 // active thread is reused, never stacked.
 
@@ -26,6 +27,17 @@ export function newSpeechChat() {
   const s: SpeechSession = { id: newSpeechChatId(), title: "New speech", turns: [], updatedAt: Date.now() };
   speechSessions.update((ss) => [s, ...ss]);
   activeSpeechChatId.set(s.id);
+}
+
+export function newMusicChat() {
+  const cur = get(musicSessions).find((s) => s.id === get(activeMusicChatId));
+  if (cur && cur.turns.length === 0) {
+    activeMusicChatId.set(cur.id);
+    return;
+  }
+  const s: MusicSession = { id: newMusicChatId(), title: "New music", turns: [], updatedAt: Date.now() };
+  musicSessions.update((ss) => [s, ...ss]);
+  activeMusicChatId.set(s.id);
 }
 
 // "3m ago" / "2h ago" / "Mon" / "Sep 3": compact enough for a meta line.

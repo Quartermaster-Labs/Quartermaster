@@ -234,6 +234,11 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	// is exact, and re-sniffing the file here could only disagree with the config
 	// the model will actually launch with.
 	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), IsImage: isImage, IsVideo: isVideo, IsAudio: isAudio, IsSam: isSam, Is3D: is3D, Class: class, IsAudioCpp: hasMC && !mc.AudioCpp.Empty(), HasOverride: existing != nil}
+	if hasMC && slices.Contains(autogen.AudioCppWeightTypeFamilies, mc.AudioCpp.Family) {
+		if gf, err := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir); err == nil {
+			resp.AudioWeightTypeAuto = autogen.AudioCppWeightTypeAuto(gf.Settings, existing, mc.AudioCpp.Family, mc.AudioCpp.SessionOptions)
+		}
+	}
 	if dn, err := autogen.LoadSidecarDisplayNames(s.autogen.GeneratePath); err == nil {
 		resp.DisplayName = dn[realID]
 	}

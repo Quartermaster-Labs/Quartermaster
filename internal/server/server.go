@@ -885,6 +885,14 @@ func (s *Server) routes() {
 	mux.Handle("GET /sdcpp/v1/jobs/{id}", discoveryChain.ThenFunc(s.handleVideoJob))
 	mux.Handle("POST /sdcpp/v1/jobs/{id}/cancel", discoveryChain.ThenFunc(s.handleVideoJobCancel))
 
+	// Music and stem separation on audio.cpp. Typed routes rewritten onto its
+	// generic /v1/tasks/run, which takes server FILE PATHS and must never be
+	// reachable as-is; uploads are staged to a temp file we own. See musicapi.go.
+	mux.Handle("POST /v1/music/generations", modelChain.ThenFunc(s.handleMusic(musicGenerate)))
+	mux.Handle("POST /v1/music/edits", modelChain.ThenFunc(s.handleMusic(musicEdit)))
+	mux.Handle("POST /v1/audio/separations", modelChain.ThenFunc(s.handleMusic(musicSeparate)))
+	mux.Handle("POST /v1/music/transcriptions", modelChain.ThenFunc(s.handleMusic(musicTranscribe)))
+
 	// quartermaster API + custom endpoints.
 	mux.Handle("GET /v1/models", discoveryChain.ThenFunc(s.handleListModels))
 	// Standalone ESRGAN/RealESRGAN upscale (exec-per-request, not model-dispatched).
@@ -895,6 +903,7 @@ func (s *Server) routes() {
 	// as the inference routes (discoveryChain), data-plane responses.
 	mux.Handle("POST /v1/tools/search", discoveryChain.ThenFunc(s.handleToolSearch))
 	mux.Handle("POST /v1/tools/youtube/transcript", discoveryChain.ThenFunc(s.handleToolYouTubeTranscript))
+	mux.Handle("POST /v1/tools/media/audio", discoveryChain.ThenFunc(s.handleToolMediaAudio))
 	mux.Handle("POST /v1/tools/youtube/search", discoveryChain.ThenFunc(s.handleToolYouTubeSearch))
 	mux.Handle("POST /v1/tools/youtube/comments", discoveryChain.ThenFunc(s.handleToolYouTubeComments))
 	mux.Handle("GET /logs", adminChain.ThenFunc(s.handleLogs))
@@ -985,6 +994,11 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/3dchats", apiChain.ThenFunc(s.handlePlaygroundThreeDChats))
 	mux.Handle("GET /api/speechchats", apiChain.ThenFunc(s.handlePlaygroundSpeechChats))
 	mux.Handle("PUT /api/speechchats", apiChain.ThenFunc(s.handlePlaygroundSpeechChats))
+	mux.Handle("GET /api/musicchats", apiChain.ThenFunc(s.handlePlaygroundMusicChats))
+	mux.Handle("PUT /api/musicchats", apiChain.ThenFunc(s.handlePlaygroundMusicChats))
+	mux.Handle("GET /api/musicscores", apiChain.ThenFunc(s.handlePlaygroundMusicScores))
+	mux.Handle("PUT /api/musicscores", apiChain.ThenFunc(s.handlePlaygroundMusicScores))
+	mux.Handle("POST /api/media", apiChain.ThenFunc(s.handlePlaygroundMediaUpload))
 	mux.Handle("GET /api/media/{file...}", apiChain.ThenFunc(s.handlePlaygroundMedia))
 	// Assistant memory is server-owned (model AND browser write it) — per-entry
 	// CRUD, not the whole-blob PUT the other per-user files use. See memories.go.

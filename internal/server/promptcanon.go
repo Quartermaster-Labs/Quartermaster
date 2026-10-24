@@ -67,9 +67,10 @@ func (pc *promptCanon) middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
-		if err != nil {
-			r.Body = io.NopCloser(bytes.NewReader(body))
+		// A body past the peek limit is an upload (base64 audio or image), not a
+		// chat prompt: pass it on whole and untouched.
+		body, complete, err := peekBody(r, maxPeekBytes)
+		if err != nil || !complete {
 			next.ServeHTTP(w, r)
 			return
 		}

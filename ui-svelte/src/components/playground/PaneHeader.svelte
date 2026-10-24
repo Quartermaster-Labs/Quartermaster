@@ -17,9 +17,30 @@
     newLabel: string;
     onNew: () => void;
     right?: Snippet;
+    // Present = the title is a button that turns into a field. Called with the
+    // trimmed text; "" means "go back to the automatic title".
+    onRename?: (title: string) => void;
   }
 
-  let { title, meta = "", updatedAt, newLabel, onNew, right }: Props = $props();
+  let { title, meta = "", updatedAt, newLabel, onNew, right, onRename }: Props = $props();
+
+  let editing = $state(false);
+  let draft = $state("");
+  function startEdit() {
+    draft = title;
+    editing = true;
+  }
+  // Blur commits, so Enter only has to blur; Escape restores the old text first.
+  function commit() {
+    if (!editing) return;
+    editing = false;
+    const t = draft.trim();
+    if (t !== title) onRename?.(t);
+  }
+  function focusSelect(el: HTMLInputElement) {
+    el.focus();
+    el.select();
+  }
 
   let now = $state(Date.now());
   $effect(() => {
@@ -39,7 +60,32 @@
   >
     <History class="w-4 h-4" />
   </button>
-  <span class="truncate text-sm text-txtmain min-w-0">{title}</span>
+  {#if editing}
+    <input
+      use:focusSelect
+      bind:value={draft}
+      onblur={commit}
+      onkeydown={(e) => {
+        if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
+        else if (e.key === "Escape") {
+          e.stopPropagation();
+          draft = title;
+          (e.currentTarget as HTMLInputElement).blur();
+        }
+      }}
+      maxlength="120"
+      aria-label="Thread title"
+      class="min-w-0 flex-1 max-w-md h-7 rounded border border-primary bg-background px-1.5 -mx-1.5 text-sm text-txtmain focus:outline-none"
+    />
+  {:else if onRename}
+    <button
+      class="truncate min-w-0 text-left text-sm text-txtmain rounded px-1.5 -mx-1.5 h-7 border border-transparent hover:border-card-border cursor-text"
+      onclick={startEdit}
+      use:tip={"Rename. Clear it to go back to the automatic title"}
+    >{title}</button>
+  {:else}
+    <span class="truncate text-sm text-txtmain min-w-0">{title}</span>
+  {/if}
   {#if metaLine}
     <span class="shrink-0 font-mono text-micro text-txtsecondary tabular-nums whitespace-nowrap">· {metaLine}</span>
   {/if}

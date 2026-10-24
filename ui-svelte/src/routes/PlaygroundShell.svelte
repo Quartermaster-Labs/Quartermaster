@@ -84,7 +84,14 @@
     newSpeechChatId,
     type SpeechSession,
   } from "../stores/speechHistory";
-  import { MessageSquare, Image, Film, Box, Volume2, Mic, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil, BrainCircuit, RefreshCw, Square, Split } from "lucide-svelte";
+  import {
+    musicSessions,
+    activeMusicChatId,
+    generatingMusicChatId,
+    newMusicChatId,
+    type MusicSession,
+  } from "../stores/musicHistory";
+  import { MessageSquare, Image, Film, Box, Volume2, Music, Mic, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil, BrainCircuit, RefreshCw, Square, Split } from "lucide-svelte";
   import WikiModal from "../components/WikiModal.svelte";
   import ChatInterface from "../components/playground/ChatInterface.svelte";
   import Select from "../components/Select.svelte";
@@ -95,6 +102,7 @@
   import AudioInterface from "../components/playground/AudioInterface.svelte";
   import DecisionInterface from "../components/playground/DecisionInterface.svelte";
   import SpeechInterface from "../components/playground/SpeechInterface.svelte";
+  import MusicInterface from "../components/playground/MusicInterface.svelte";
   import HistoryDrawer, { type DrawerSession } from "../components/playground/HistoryDrawer.svelte";
   import { slide } from "svelte/transition";
 
@@ -109,6 +117,7 @@
     { id: "video", label: "Video", hint: "Generate short video clips from a prompt", icon: Film },
     { id: "3d", label: "3D", hint: "Turn a picture into a 3D mesh you can orbit and download", icon: Box },
     { id: "speech", label: "Speech", hint: "Text to speech: pick a voice and read text aloud", icon: Volume2 },
+    { id: "music", label: "Music", hint: "Songs, edits and stems", icon: Music },
     { id: "audio", label: "Transcription", hint: "Transcribe recorded or uploaded audio to text", icon: Mic },
     { id: "decision", label: "Decision", hint: "Ask a decision model questions about a situation and read its probabilities", icon: Split },
   ];
@@ -118,12 +127,14 @@
   let onVideo = $derived($selectedTabStore === "video");
   let onThreeD = $derived($selectedTabStore === "3d");
   let onSpeech = $derived($selectedTabStore === "speech");
+  let onMusic = $derived($selectedTabStore === "music");
   // Rows for the history drawer, per tab. Sorting and grouping live in the drawer.
   let chatRows = $derived<DrawerSession[]>($chatSessions.map((x) => ({ id: x.id, title: x.title, updatedAt: x.updatedAt, count: x.messages.length })));
   let imageRows = $derived<DrawerSession[]>($imageSessions.map((x) => ({ id: x.id, title: x.title, updatedAt: x.updatedAt, count: x.turns.length })));
   let videoRows = $derived<DrawerSession[]>($videoSessions.map((x) => ({ id: x.id, title: x.title, updatedAt: x.updatedAt, count: x.turns.length })));
   let threeDRows = $derived<DrawerSession[]>($threeDSessions.map((x) => ({ id: x.id, title: x.title, updatedAt: x.updatedAt, count: x.turns.length })));
   let speechRows = $derived<DrawerSession[]>($speechSessions.map((x) => ({ id: x.id, title: x.title, updatedAt: x.updatedAt, count: x.turns.length })));
+  let musicRows = $derived<DrawerSession[]>($musicSessions.map((x) => ({ id: x.id, title: x.title, updatedAt: x.updatedAt, count: x.turns.length })));
 
   // Every tab but transcription and decision keeps threads, so only those two
   // have no history drawer (a decision run is stateless: the question set is a
@@ -164,6 +175,7 @@
   let confirmDeleteVideoId = $state<string | null>(null);
   let confirmDeleteThreeDId = $state<string | null>(null);
   let confirmDeleteSpeechId = $state<string | null>(null);
+  let confirmDeleteMusicId = $state<string | null>(null);
   let showSettings = $state(false);
   // Which settings category the modal's side-nav has selected.
   type SettingsCat = "general" | "memory" | "search" | "prompt";
@@ -642,6 +654,23 @@
       activeSpeechChatId.set(s.id);
     }
   }
+
+  function deleteMusicChat(id: string) {
+    confirmDeleteMusicId = null;
+    const remaining = get(musicSessions).filter((s) => s.id !== id);
+    if (id !== get(activeMusicChatId)) {
+      musicSessions.set(remaining);
+      return;
+    }
+    if (remaining.length > 0) {
+      musicSessions.set(remaining);
+      activeMusicChatId.set(remaining[0].id);
+    } else {
+      const s: MusicSession = { id: newMusicChatId(), title: "New music", turns: [], updatedAt: Date.now() };
+      musicSessions.set([s]);
+      activeMusicChatId.set(s.id);
+    }
+  }
 </script>
 
 <!-- overflow-hidden: the shell is exactly one viewport tall and every pane owns
@@ -687,6 +716,9 @@
             {/if}
             {#if tab.id === "speech" && $generatingSpeechChatId}
               <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" use:tooltip={"Speech is generating"}></span>
+            {/if}
+            {#if tab.id === "music" && $generatingMusicChatId}
+              <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" use:tooltip={"Music is generating"}></span>
             {/if}
           </span>
         </span>
@@ -765,10 +797,12 @@
           <HistoryDrawer heading="Meshes" sessions={threeDRows} activeId={$activeThreeDChatId} generatingId={$generatingThreeDChatId} unit="mesh" emptyLabel="New mesh" onOpen={(id) => activeThreeDChatId.set(id)} onDelete={(id) => (confirmDeleteThreeDId = id)} thumbsFor={threeDThumbs} />
         {:else if onSpeech}
           <HistoryDrawer heading="Speech" sessions={speechRows} activeId={$activeSpeechChatId} generatingId={$generatingSpeechChatId} unit="take" emptyLabel="New speech" onOpen={(id) => activeSpeechChatId.set(id)} onDelete={(id) => (confirmDeleteSpeechId = id)} />
+        {:else if onMusic}
+          <HistoryDrawer heading="Music" sessions={musicRows} activeId={$activeMusicChatId} generatingId={$generatingMusicChatId} unit="take" emptyLabel="New music" onOpen={(id) => activeMusicChatId.set(id)} onDelete={(id) => (confirmDeleteMusicId = id)} />
         {/if}
       </div>
     {/if}
-    <!-- Chat, Images and Speech draw their own edge-to-edge header band, so they
+    <!-- Chat, Images, Speech and Music draw their own edge-to-edge header band, so they
          own their padding; the older tabs keep the 16px gutter here. -->
     <div class="relative flex-1 min-w-0 h-full">
       <div class="h-full" class:tab-hidden={$selectedTabStore !== "chat"}><ChatInterface /></div>
@@ -776,6 +810,7 @@
       <div class="h-full px-4 pb-4" class:tab-hidden={$selectedTabStore !== "video"}><VideoInterface /></div>
       <div class="h-full px-4 pb-4" class:tab-hidden={$selectedTabStore !== "3d"}><ThreeDInterface /></div>
       <div class="h-full" class:tab-hidden={$selectedTabStore !== "speech"}><SpeechInterface /></div>
+      <div class="h-full" class:tab-hidden={$selectedTabStore !== "music"}><MusicInterface /></div>
       <div class="h-full px-4 pb-4" class:tab-hidden={$selectedTabStore !== "audio"}><AudioInterface /></div>
       <div class="h-full px-4 pb-4" class:tab-hidden={$selectedTabStore !== "decision"}><DecisionInterface /></div>
     </div>
@@ -949,6 +984,41 @@
         <button
           class="px-3 py-1.5 rounded-md text-sm bg-error text-white hover:opacity-90 transition-opacity"
           onclick={() => confirmDeleteSpeechId && deleteSpeechChat(confirmDeleteSpeechId)}
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Delete music thread confirmation -->
+{#if confirmDeleteMusicId}
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+    onclick={() => (confirmDeleteMusicId = null)}
+    onkeydown={(e) => e.key === "Escape" && (confirmDeleteMusicId = null)}
+    role="button"
+    tabindex="-1"
+  >
+    <div
+      class="w-72 flex flex-col gap-3 p-4 rounded-lg border border-card-border bg-surface shadow-lg"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+      role="dialog"
+      tabindex="-1"
+    >
+      <p class="text-sm text-txtmain">Delete this music thread? This can't be undone.</p>
+      <div class="flex justify-end gap-2">
+        <button
+          class="px-3 py-1.5 rounded-md text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
+          onclick={() => (confirmDeleteMusicId = null)}
+        >
+          Cancel
+        </button>
+        <button
+          class="px-3 py-1.5 rounded-md text-sm bg-error text-white hover:opacity-90 transition-opacity"
+          onclick={() => confirmDeleteMusicId && deleteMusicChat(confirmDeleteMusicId)}
         >
           Delete
         </button>

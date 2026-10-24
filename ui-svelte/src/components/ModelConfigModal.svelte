@@ -307,6 +307,8 @@
   // audio.cpp only: the --device pin. null => let the generator probe and pick
   // the first discrete GPU, which is what the iGPU-enumerates-first case needs.
   let audioDevice = $state<number | null>(null);
+  // audio.cpp MiniMax only: "" auto, "native" or "f16".
+  let audioWeightType = $state("");
   let variants = $state<ModelVariant[]>([]);
   // Per-model ctx tiers (32k/64k…), seeded from override.ctxVariants ints as
   // editable variant entries. On save, tiers that only set ctx collapse back to
@@ -604,7 +606,7 @@
   $effect(() => {
     const deps = [
       open, config, selectedVariant,
-      ctx, ctxAuto, kvK, kvV, kvInRam, spec, reasoningOn, reasoningBudget, preserveThinking, flashOn, mmapOn, mlock, threads, parallel, ub, vramTarget, vramAuto, cpuOffload, cpuAuto, device, swapGroup, customArgs, customArgsOff, ctxCheckpoints, audioDevice,
+      ctx, ctxAuto, kvK, kvV, kvInRam, spec, reasoningOn, reasoningBudget, preserveThinking, flashOn, mmapOn, mlock, threads, parallel, ub, vramTarget, vramAuto, cpuOffload, cpuAuto, device, swapGroup, customArgs, customArgsOff, ctxCheckpoints, audioDevice, audioWeightType,
       dryOn, dryMultiplier, dryBase, dryAllowedLength, specDraftNMax, specDefault, specNgramSizeN, specNgramSizeM, specNgramMinHits,
       vaePath, clipLPath, clipGPath, t5Path, textEncoderPath, offloadToCpu, teOnCpu, vaeOnCpu, vaeTiling, diffusionFa,
       temporalTiling, streamLayers,
@@ -838,6 +840,11 @@
   // Default tab: where the projector sits on the text ids (default + ctx tiers
   // + named variants). Blank IS "ram", so the two share an entry - a stored
   // "ram" normalises to "" on load.
+  const audioWeightSel = $derived<SelectOption[]>([
+    { value: "", label: `Auto (${config?.audioWeightTypeAuto === "f16" ? "F16" : "Native"} on this backend)` },
+    { value: "native", label: "Native", detail: "The file's own types: smallest footprint" },
+    { value: "f16", label: "F16", detail: "Dequantize on load: fixes the Vulkan hiss, about twice the VRAM of q8_0" },
+  ]);
   const MMPROJ_SEL: SelectOption[] = [
     { value: "", label: "in RAM (default, no VRAM cost)" },
     { value: "gpu", label: "on GPU (fast images, costs VRAM)" },
@@ -1026,6 +1033,7 @@
     slotCachePreambleOn = o?.slotCachePreamble ?? true;
     ctxCheckpoints = o?.ctxCheckpoints ?? null;
     audioDevice = o?.audioDevice ?? null;
+    audioWeightType = o?.audioWeightType ?? "";
     variants = (o?.variants ?? []).map((v) => {
       const c = { ...v };
       if (audioMode || samMode) {
@@ -1431,6 +1439,7 @@
       slotCachePreamble: slotCachePreambleOn ? null : false,
       ctxCheckpoints,
       audioDevice,
+      audioWeightType,
       // ctx tiers with nothing but a ctx stay compact ints; any with extra knobs
       // promote to named variants alongside the explicit ones.
       ctxVariants: ctxTiers.filter(ctxTierIsPure).map((v) => v.ctx ?? 0).filter((n) => n > 0),
@@ -2443,6 +2452,18 @@
                 {/if}
               </div>
             </label>
+            {#if config?.audioWeightTypeAuto}
+              <!-- MiniMax Music 3 only. Auto converts the quantized packages to
+                   f16 on Vulkan, where they otherwise render a hiss; the pin is
+                   for a backend or build where that trade is wrong. -->
+              <label class="flex flex-col gap-1 text-sm col-span-2">
+                <span class="text-txtsecondary flex items-center gap-1">
+                  Weight storage
+                  {@render hint("How the weights are held once loaded (weight_type). F16 dequantizes the q8_0/q4_0 components on load: needed on Vulkan, where they otherwise render a hiss instead of music, but it costs q4_0 the VRAM of q8_0. Native keeps the file's own types and the smaller footprint. The VRAM estimate follows the choice.")}
+                </span>
+                <Select bind:value={audioWeightType} options={audioWeightSel} ariaLabel="Weight storage" />
+              </label>
+            {/if}
           {/if}
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">

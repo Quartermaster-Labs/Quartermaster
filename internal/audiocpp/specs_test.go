@@ -155,3 +155,27 @@ func TestSpecsDir(t *testing.T) {
 		t.Errorf("SpecsDir(blank) = %q, want empty", got)
 	}
 }
+
+// A source build keeps model_specs at the checkout root, not beside the exe.
+func TestSpecsDir_SourceBuild(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, "build", "windows-hip71-release", "bin")
+	specs := filepath.Join(root, DirName)
+	for _, d := range []string{bin, specs} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := SpecsDir(filepath.Join(bin, "audiocpp_server.exe")); got != specs {
+		t.Errorf("SpecsDir = %q, want the checkout's %q", got, specs)
+	}
+
+	// One beside the binary still wins over the checkout's.
+	near := filepath.Join(bin, DirName)
+	if err := os.MkdirAll(near, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := SpecsDir(filepath.Join(bin, "audiocpp_server.exe")); got != near {
+		t.Errorf("SpecsDir = %q, want the binary's own %q", got, near)
+	}
+}
