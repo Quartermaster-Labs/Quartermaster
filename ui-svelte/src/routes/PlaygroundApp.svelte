@@ -7,6 +7,7 @@
   import { loadThreeDChats, clearThreeDChats, threeDSessions, activeThreeDChatId, generatingThreeDChatId } from "../stores/threeDHistory";
   import { loadSpeechChats, clearSpeechChats, speechSessions, activeSpeechChatId, generatingSpeechChatId } from "../stores/speechHistory";
   import { loadMusicChats, clearMusicChats, musicSessions, activeMusicChatId, generatingMusicChatId } from "../stores/musicHistory";
+  import { loadScoreLibrary, clearScoreLibrary } from "../stores/scoreLibrary";
   import { loadPrefs, clearPrefs } from "../stores/prefs";
   import { migrateVoicesCache } from "../lib/voices";
   import { loadMemories, clearMemories } from "../stores/memories";
@@ -89,7 +90,7 @@
   $effect(() => {
     if ($me) {
       chatsLoaded = false;
-      Promise.all([loadChats(), loadImageChats(), loadVideoChats(), loadThreeDChats(), loadSpeechChats(), loadMusicChats(), loadPrefs(), loadMemories()]).then(() => {
+      Promise.all([loadChats(), loadImageChats(), loadVideoChats(), loadThreeDChats(), loadSpeechChats(), loadMusicChats(), loadScoreLibrary(), loadPrefs(), loadMemories()]).then(() => {
         // The TTS voice lists used to live in localStorage; fold anything left
         // there into the now server-backed prefs blob. One-shot, post-hydration.
         migrateVoicesCache();
@@ -103,6 +104,7 @@
       clearThreeDChats();
       clearSpeechChats();
       clearMusicChats();
+      clearScoreLibrary();
       clearPrefs();
       clearMemories();
       chatsLoaded = false;

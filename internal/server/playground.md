@@ -10,7 +10,7 @@ runner** behind it. The tools' own fetch paths are in [`tools.md`](tools.md); th
 `users.json`), server-backed chat history + prefs, and `/api/mode` so **one bundle serves dashboard
 or playground per port**.
 
-**Storage** is per-user `DataDir/users/<user>/{chats,imagechats,videochats,speechchats,musicchats,prefs}.json`. Generated
+**Storage** is per-user `DataDir/users/<user>/{chats,imagechats,videochats,speechchats,musicchats,musicscores,prefs}.json`. Generated
 media (inline `data:` base64) is split out on write into `media/<hash>.<ext>` (`extractMedia`, a
 regex over raw bytes — structure-agnostic, byte-preserves numbers/timestamps, dedups by content
 hash) and served via `GET /api/media/{file...}` (per-user, Range-capable). Boot-time `Migrate()`

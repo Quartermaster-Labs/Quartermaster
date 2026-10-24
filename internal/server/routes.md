@@ -164,7 +164,7 @@ See [`hubapi.md`](hubapi.md).
 See [`playground.md`](playground.md).
 
 `GET /api/mode`; `POST /auth/login`, `/auth/logout`, `GET /auth/me`;
-`GET`/`PUT /api/{chats,imagechats,videochats,speechchats,musicchats,prefs}`; `GET /api/media/{file...}`;
+`GET`/`PUT /api/{chats,imagechats,videochats,speechchats,musicchats,musicscores,prefs}`; `GET /api/media/{file...}`;
 `POST /api/media` (raw audio/image body, returns `{url}`; how the Music tab stores results);
 assistant memory `GET`/`POST /api/memories` + `DELETE /api/memories/{id}` (`memories.go`);
 server-run turns `POST /api/chats/turn` + `/stream`, `/state`, `/approve` + `DELETE` (`turns.go`);

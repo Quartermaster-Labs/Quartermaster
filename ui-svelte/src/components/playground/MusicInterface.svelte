@@ -44,7 +44,11 @@
     ScrollText,
     Plus,
     Info,
+    Library,
   } from "lucide-svelte";
+  import ScoreList from "./ScoreList.svelte";
+  import ScoreViewer from "./ScoreViewer.svelte";
+  import { scoreLibrary, addScore, abcTitle, type LibraryScore } from "../../stores/scoreLibrary";
   import { scrollFade } from "../../lib/scrollFade";
   import AudioPlayer from "./AudioPlayer.svelte";
   import PaneHeader from "./PaneHeader.svelte";
@@ -58,6 +62,9 @@
   //   edit    repaint a window / complete / cover an existing clip (ACE-Step)
   //   stems   a clip, uploaded or pulled from a link (yt-dlp), split into
   //           four stems (HTDemucs)
+  //   scores  the score library (stores/scoreLibrary.ts): every score read
+  //           from a song, plus uploaded .abc files. Needs no model, so it is
+  //           always offered; the composer's + can pick from it too.
   // Each mode has its own model pick, filtered by capability, so switching modes
   // never leaves a model selected that the route would refuse.
   //
@@ -69,7 +76,8 @@
   // Every audio field a take holds is a /api/media ref (see stores/musicHistory.ts):
   // results are uploaded once as they land, and the thread only carries refs.
 
-  type Mode = "create" | "edit" | "stems";
+  type Mode = "create" | "edit" | "stems" | "scores";
+  type ModelMode = Exclude<Mode, "scores">;
   const modeStore = userPref<Mode>("playground-music-mode", "create");
   // playground-music-model is also what the dashboard's "open in playground"
   // writes (PlaygroundApp TAB_MODEL_PREF), so it can arrive holding a separator.
@@ -104,12 +112,12 @@
     { value: "off", label: "off" },
   ];
 
-  const CAP: Record<Mode, string[]> = {
+  const CAP: Record<ModelMode, string[]> = {
     create: ["music_generation"],
     edit: ["music_edit"],
     stems: ["audio_separation"],
   };
-  const STORE: Record<Mode, typeof genModelStore> = { create: genModelStore, edit: editModelStore, stems: stemsModelStore };
+  const STORE: Record<ModelMode, typeof genModelStore> = { create: genModelStore, edit: editModelStore, stems: stemsModelStore };
 
   let listed = $derived($models.filter((m) => !m.unlisted));
   let modelsFor = $derived({
@@ -137,7 +145,7 @@
   // Keep each mode's pick valid: an empty or vanished id falls back to the
   // first model that can serve the mode.
   $effect(() => {
-    for (const mode of ["create", "edit", "stems"] as Mode[]) {
+    for (const mode of ["create", "edit", "stems"] as ModelMode[]) {
       const store = STORE[mode];
       const cur = get(store);
       const pool = modelsFor[mode];
@@ -145,14 +153,17 @@
     }
   });
 
-  // A mode with no model is hidden; fall back to one that has.
-  let modes = $derived((["create", "edit", "stems"] as Mode[]).filter((m) => modelsFor[m].length > 0));
+  // A mode with no model is hidden; fall back to one that has. The library
+  // needs none.
+  let modes = $derived<Mode[]>([...(["create", "edit", "stems"] as ModelMode[]).filter((m) => modelsFor[m].length > 0), "scores"]);
   $effect(() => {
     if (modes.length && !modes.includes($modeStore)) modeStore.set(modes[0]);
   });
   let mode = $derived($modeStore);
-  let modelStore = $derived(STORE[mode]);
-  let model = $derived(mode === "create" ? $genModelStore : mode === "edit" ? $editModelStore : $stemsModelStore);
+  // The composer's mode: Scores has no composer, so it keeps Create's pick.
+  let runMode = $derived<ModelMode>(mode === "scores" ? "create" : mode);
+  let modelStore = $derived(STORE[runMode]);
+  let model = $derived(mode === "edit" ? $editModelStore : mode === "stems" ? $stemsModelStore : $genModelStore);
 
   // MiniMax Music 3 requires lyrics and takes none of ACE-Step's metadata
   // options. YuE2 takes none of them either, and has no length: the song is as
@@ -180,7 +191,9 @@
       return;
     }
     try {
-      scoreStore.set(await file.text());
+      const text = await file.text();
+      scoreStore.set(text);
+      addScore(text, "uploaded", abcTitle(text, file.name.replace(/\.[^.]+$/, "")));
     } catch (err) {
       scoreError = err instanceof Error ? err.message : String(err);
     }
@@ -230,6 +243,7 @@
       if (scoreAbort !== ac) return;
       scoreStore.set(res.score);
       scoreOriginStore.set({ label: got.label, url: got.link, score: res.score });
+      addScore(res.score, "extracted", abcTitle(res.score, got.label), { label: got.label, url: got.link });
       // A reference was attached to be used: with planning off YuE2 would 400 it.
       if (get(cotStore) === "off") cotStore.set("melody");
       scoreJob = null;
@@ -644,6 +658,8 @@
     }
     if (t.task === "transcribe") {
       const res = await transcribeAudio(t.model, await fetchBlob(t.source!), signal);
+      const label = t.sourceLabel || "a recording";
+      addScore(res.score, "extracted", abcTitle(res.score, label), { label, url: t.sourceUrl });
       return { score: res.score };
     }
     const base = {
@@ -766,7 +782,7 @@
       repaintStrength = t.strength ?? repaintStrength;
     }
     if (t.task === "cover" && t.strength !== undefined) coverStrength = t.strength;
-    const m: Mode = t.task === "generate" ? "create" : "edit";
+    const m: ModelMode = t.task === "generate" ? "create" : "edit";
     if (modelsFor[m].some((x) => x.id === t.model)) STORE[m].set(t.model);
     modeStore.set(m);
     if (t.source && t.task !== "generate") void useTakeAsSource(t.source, t.sourceLabel || "source", m);
@@ -783,6 +799,27 @@
     if (!t.score) return;
     scoreStore.set(t.score);
     scoreOriginStore.set({ label: t.sourceLabel || "a recording", url: t.sourceUrl, score: t.score });
+    toScoreModel();
+  }
+
+  // --- score library ------------------------------------------------------------
+  const pickedScoreStore = userPref<string>("playground-music-library-pick", "");
+  let pickedScore = $derived($scoreLibrary.find((s) => s.id === $pickedScoreStore) ?? null);
+  // The picked score vanished (deleted here or in another tab): show the newest.
+  $effect(() => {
+    if (!pickedScore && $scoreLibrary.length) pickedScoreStore.set([...$scoreLibrary].sort((a, b) => b.updatedAt - a.updatedAt)[0].id);
+  });
+  let libraryOpen = $state(false);
+
+  // A library score into the composer, credited to its recording if it has one.
+  function useLibraryScore(s: LibraryScore) {
+    libraryOpen = false;
+    scoreAbort?.abort();
+    scoreJob = null;
+    scoreError = "";
+    scoreStore.set(s.abc);
+    scoreOriginStore.set(s.origin ? { ...s.origin, score: s.abc } : null);
+    if (get(cotStore) === "off") cotStore.set("melody");
     toScoreModel();
   }
 
@@ -874,7 +911,7 @@
     newLabel="New"
     onNew={newMusicChat}
   />
-  {#if !hasAny}
+  {#if !hasAny && !$scoreLibrary.length}
     <div class="flex-1 flex flex-col items-center justify-center gap-3 text-txtsecondary">
       <Music class="w-10 h-10 opacity-40" strokeWidth={1.5} />
       <p>No music models. Download ACE-Step, MiniMax Music 3, YuE2, HTDemucs or SheetSage2 from the model browser to use this tab.</p>
@@ -887,12 +924,17 @@
           <div class="seg w-full" role="group" aria-label="Mode">
             {#each modes as m (m)}
               <button class="flex-1" aria-pressed={mode === m} onclick={() => modeStore.set(m)}>
-                {m === "create" ? "Create" : m === "edit" ? "Edit" : "Stems"}
+                {m === "create" ? "Create" : m === "edit" ? "Edit" : m === "stems" ? "Stems" : "Scores"}
               </button>
             {/each}
           </div>
         </div>
 
+        {#if mode === "scores"}
+          <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll p-3">
+            <ScoreList selected={$pickedScoreStore} onselect={(s) => pickedScoreStore.set(s.id)} />
+          </div>
+        {:else}
         <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll flex flex-col gap-3.5 p-4">
           {#if mode !== "create"}
             <!-- Source clip: a take (from its card menu) or a file. -->
@@ -1112,6 +1154,7 @@
             <p class="text-xs text-txtsecondary leading-snug">Splits the source into drums, bass, vocals and other. No prompt needed.</p>
           {/if}
         </div>
+        {/if}
         <!-- One volume for every player on the page, the source clip included. It
              lives here, apart from the takes, so it reads as the page's volume. -->
         <div class="shrink-0 flex items-center gap-2 px-3 h-10 border-t border-card-border-inner" use:tip={"Playback volume for every player: the source clip and all takes"}>
@@ -1123,6 +1166,25 @@
         </div>
       </aside>
 
+      {#if mode === "scores"}
+        <!-- RIGHT: the picked library score. -->
+        <div class="flex-1 min-w-0 flex flex-col min-h-0 px-6 pb-3">
+          {#if pickedScore}
+            <ScoreViewer
+              score={pickedScore}
+              volume={$volumeStore}
+              useLabel={scoreModels.length ? "Use in Create" : ""}
+              onuse={useLibraryScore}
+              disclaimer={DISCLAIMER}
+            />
+          {:else}
+            <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary text-center">
+              <Library class="w-10 h-10 opacity-40" strokeWidth={1.5} />
+              <p>Scores read from songs land here.<br />Upload .abc files on the left to add your own.</p>
+            </div>
+          {/if}
+        </div>
+      {:else}
       <!-- RIGHT: takes grid over the composer. -->
       <div class="flex-1 min-w-0 flex flex-col min-h-0 px-6">
         <div class="flex items-center gap-2.5 h-10 shrink-0">
@@ -1415,6 +1477,12 @@
                         <span class="px-3 py-1.5 text-xs text-txtsecondary leading-snug">Download SheetSage2 to use a song as a reference.</span>
                       {/if}
                       <div class="my-1 border-t border-card-border-inner"></div>
+                      {#if scoreFormat === "abc"}
+                        <button class="flex items-center gap-2 px-3 py-1.5 text-left text-txtmain hover:bg-secondary disabled:opacity-50" role="menuitem" disabled={!$scoreLibrary.length} onclick={() => { attachOpen = false; libraryOpen = true; }}>
+                          <Library class="w-3.5 h-3.5" /> From the library…
+                          <span class="ml-auto font-mono text-micro text-txtsecondary tabular-nums">{$scoreLibrary.length}</span>
+                        </button>
+                      {/if}
                       <label class="flex items-center gap-2 px-3 py-1.5 text-txtmain hover:bg-secondary cursor-pointer">
                         <FileText class="w-3.5 h-3.5" /> Load a .{scoreFormat} score
                         <input type="file" accept=".{scoreFormat},text/plain" class="hidden" onchange={(e) => { attachOpen = false; scoreAbort?.abort(); scoreJob = null; void onScoreFile(e); }} />
@@ -1429,7 +1497,7 @@
                     bind:value={$modelStore}
                     placeholder="Select a model…"
                     disabled={isGenerating}
-                    capabilities={CAP[mode]}
+                    capabilities={CAP[runMode]}
                     matchAny
                     ghost
                     dropUp
@@ -1464,6 +1532,7 @@
           </div>
         </div>
       </div>
+      {/if}
     </div>
   {/if}
 </div>
@@ -1472,10 +1541,26 @@
   onkeydown={(e) => {
     if (e.key !== "Escape") return;
     if (refsOf) refsOf = null;
+    libraryOpen = false;
     attachOpen = false;
   }}
   onpointerdown={(e) => { if (attachOpen && attachEl && !attachEl.contains(e.target as Node)) attachOpen = false; }}
 />
+
+{#if libraryOpen}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) libraryOpen = false; }}>
+    <div class="w-full max-w-md rounded-2xl border border-card-border bg-surface p-5 shadow-xl max-h-[calc(80vh/var(--qm-scale))] flex flex-col gap-3" role="dialog" aria-modal="true" aria-label="Score library">
+      <div class="flex items-center gap-2">
+        <Library class="w-4 h-4 text-txtsecondary" />
+        <span class="font-medium">Sing over a library score</span>
+        <button class="icon-btn ml-auto" onclick={() => (libraryOpen = false)} aria-label="Close"><X class="w-4 h-4" /></button>
+      </div>
+      <div class="min-h-0 overflow-y-auto pretty-scroll -mx-1 px-1">
+        <ScoreList dense onselect={useLibraryScore} />
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#if refsOf}
   {@const rt = refsOf.t}

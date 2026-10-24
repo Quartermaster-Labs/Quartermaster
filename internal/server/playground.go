@@ -226,6 +226,12 @@ func (p *Playground) musicChatsPath(user string) string {
 	return filepath.Join(p.userDir(user), "musicchats.json")
 }
 
+// The score library: every ABC score the user extracted or uploaded, kept apart
+// from the music threads so deleting a thread never deletes its scores.
+func (p *Playground) musicScoresPath(user string) string {
+	return filepath.Join(p.userDir(user), "musicscores.json")
+}
+
 func (p *Playground) mediaDir(user string) string { return filepath.Join(p.userDir(user), "media") }
 
 // dataURLRe matches an inline "data:<mime>;base64,<payload>" URL. base64's
@@ -796,6 +802,12 @@ func (s *Server) handlePlaygroundSpeechChats(w http.ResponseWriter, r *http.Requ
 
 func (s *Server) handlePlaygroundMusicChats(w http.ResponseWriter, r *http.Request) {
 	s.serveUserBlob(w, r, (*Playground).musicChatsPath, "[]")
+}
+
+// GET/PUT /api/musicscores: the music playground's score library. Same
+// client-owns-the-blob model as /api/musicchats.
+func (s *Server) handlePlaygroundMusicScores(w http.ResponseWriter, r *http.Request) {
+	s.serveUserBlob(w, r, (*Playground).musicScoresPath, "[]")
 }
 
 // POST /api/media — stores one raw audio or image body in the logged-in user's

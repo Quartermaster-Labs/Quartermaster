@@ -996,6 +996,8 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/speechchats", apiChain.ThenFunc(s.handlePlaygroundSpeechChats))
 	mux.Handle("GET /api/musicchats", apiChain.ThenFunc(s.handlePlaygroundMusicChats))
 	mux.Handle("PUT /api/musicchats", apiChain.ThenFunc(s.handlePlaygroundMusicChats))
+	mux.Handle("GET /api/musicscores", apiChain.ThenFunc(s.handlePlaygroundMusicScores))
+	mux.Handle("PUT /api/musicscores", apiChain.ThenFunc(s.handlePlaygroundMusicScores))
 	mux.Handle("POST /api/media", apiChain.ThenFunc(s.handlePlaygroundMediaUpload))
 	mux.Handle("GET /api/media/{file...}", apiChain.ThenFunc(s.handlePlaygroundMedia))
 	// Assistant memory is server-owned (model AND browser write it) — per-entry

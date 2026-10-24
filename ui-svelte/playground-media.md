@@ -128,8 +128,8 @@ accumulate. Sentence-level only: a length model is not good enough for words.
 
 ## `MusicInterface.svelte`
 
-The Speech studio's layout (settings rail left, takes grid right, composer under it) with three
-modes on a segmented control, one per route family in `lib/musicApi.ts`:
+The Speech studio's layout (settings rail left, takes grid right, composer under it) with four
+modes on a segmented control, three of them one per route family in `lib/musicApi.ts`:
 
 - **Create**: text to music (`/v1/music/generations`, ACE-Step, MiniMax Music 3 and YuE2).
 - **Edit**: repaint a time window, complete, or cover an existing clip (`/v1/music/edits`,
@@ -137,6 +137,8 @@ modes on a segmented control, one per route family in `lib/musicApi.ts`:
 - **Stems** (mode key `stems`): a source clip, uploaded or pulled from a pasted link
   (`fetchLinkAudio` -> `/v1/tools/media/audio`, yt-dlp, decoded by `toWav` like a file), split
   into four stems (`/v1/audio/separations`, HTDemucs). No prompt.
+- **Scores** (mode key `scores`): the score library, below. Needs no model, so it is always
+  offered, and the tab renders with no music model at all once the library has a score.
 
 **A reference song is not a mode, it is an attachment.** While the picked generator advertises
 `music_score` (YuE2), the composer has a **+** menu: upload a song, paste a link, or load a
@@ -177,6 +179,40 @@ message instead.
 Every generated take has a **References** button (scroll icon) opening a popup of what went
 into it: style/instruction, source clip and its page, lyrics, score and where it was extracted
 from, stems, and the settings (`settingsRows`). Escape or a backdrop click closes it.
+
+A take that starts (send, or "New take, new seed") pauses every `<audio>` under the tab's root
+(`stopPlayback`), so the run is not talked over by the take it is replacing.
+
+### The score library
+
+`stores/scoreLibrary.ts` (`GET`/`PUT /api/musicscores`, a per-user blob kept apart from the
+threads, so deleting a thread never takes its scores). `addScore` is called wherever a score
+appears: a SheetSage2 read through the composer's +, an older transcription take, a `.abc` loaded
+into the composer, and the Scores mode's own Upload (several files at once, 64 KiB each, the
+server's score cap). It dedupes on the normalised text, so re-reading the same song bumps the
+entry instead of adding a twin. `kind` records how it arrived; `origin` credits the recording.
+
+Scores mode is `ScoreList.svelte` in the rail and `ScoreViewer.svelte` on the right. The same
+`ScoreList` is the composer's **+ -> From the library…** picker (offered while the generator's
+`music_score` is `abc`), whose pick goes through `useLibraryScore`, the same path as a fresh read.
+The viewer's "Use in Create" does the same.
+
+`ScoreViewer` imports `lib/abcScore.ts` lazily (abcjs is ~400 KB) and:
+
+- engraves with `abcjs.renderAbc` (`foregroundColor: currentColor`, so it follows the theme);
+- plays through `lib/scorePlayer.ts`, a WebAudio lookahead scheduler over `noteEvents`, NOT
+  abcjs's synth, which fetches its soundfont from a public CDN. The sounding notes are lit via
+  `getElementFromChar(startChar).abselem.elemset`. "Chords" adds a pad under the chord symbols;
+- edits the ABC in place (saved debounced) and renames on blur;
+- exports `.abc`, `.mid` (`abcjs.synth.getMidiFile`) and `.musicxml` (`toMusicXML`).
+
+`lib/abcScore.ts` walks abcjs's parse, never the text. Every `V:` voice is a MusicXML part named
+from its `name=`; `Z<n>` becomes N measure rests; `% name` comment lines become rehearsal marks on
+the first part (domina-music's `abc_to_musicxml.py` did the same); alterations come from a written
+accidental, then the measure's memory, then the key; triplets carry `time-modification`, and a
+length no single note spells is split into tied notes. Parts are padded to one length, since
+MuseScore wants that. abcjs prints `#` in a chord name as `♯`; `parseChordName` reads both.
+`abcScore.test.ts` pins it on the SheetSage2 shape, including "every measure sums to the meter".
 
 Takes are a library, not a conversation: a new take, "New take, new seed" included, is always
 appended and nothing after it is dropped. `execute` reads the stored take rather than the form, so
