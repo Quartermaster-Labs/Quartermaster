@@ -645,6 +645,47 @@ export function noteEvents(model: ScoreModel, chords = true): NoteEvent[] {
   return out.sort((a, b) => a.start - b.start);
 }
 
+// --- playhead timeline -------------------------------------------------------------
+
+export interface TimePoint {
+  // Seconds from the start.
+  t: number;
+  // Every element (note or rest, any part) that begins at t, by its offset
+  // in the ABC text, so the viewer can find where it was engraved.
+  chars: number[];
+}
+
+// When each written element starts, rests included, so the playhead keeps
+// moving through a silent bar. One point per distinct onset, all parts merged.
+// Measure rests a voice was padded with have no text (startChar 0 and
+// endChar 0) and are left out, and a Z4 expanded into four bars counts once,
+// at its first bar: all four are the one glyph on the page.
+export function timeline(model: ScoreModel): TimePoint[] {
+  const secPerWhole = (4 * 60) / model.bpm;
+  const at = new Map<number, number[]>();
+  for (const p of model.parts) {
+    let t = 0;
+    let time: [number, number] = [4, 4];
+    let last = -1;
+    for (const m of p.measures) {
+      if (m.time) time = m.time;
+      const measureLen = time[0] / time[1];
+      for (const n of m.notes) {
+        if ((n.startChar || n.endChar) && n.startChar !== last) {
+          last = n.startChar;
+          // Rounded so two parts landing on one beat share a point.
+          const key = Math.round(t * secPerWhole * 1e4) / 1e4;
+          const list = at.get(key) ?? [];
+          list.push(n.startChar);
+          at.set(key, list);
+        }
+        t += n.measureRest ? measureLen : n.dur;
+      }
+    }
+  }
+  return [...at.entries()].sort((a, b) => a[0] - b[0]).map(([t, chars]) => ({ t, chars }));
+}
+
 // --- MIDI + file names -------------------------------------------------------------
 
 export function toMidi(abc: string): Blob {

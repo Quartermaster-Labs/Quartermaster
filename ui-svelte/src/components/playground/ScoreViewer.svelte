@@ -1,15 +1,16 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { tip } from "../../lib/tooltip";
   import Toggle from "../Toggle.svelte";
   import { updateScore, removeScore, type LibraryScore } from "../../stores/scoreLibrary";
   import type { ScoreModel } from "../../lib/abcScore";
   import type { ScorePlayer } from "../../lib/scorePlayer";
   import { createScorePlayer } from "../../lib/scorePlayer";
-  import { Play, Square, Download, Trash2, Code, Wand2, Link as LinkIcon } from "lucide-svelte";
+  import { Play, Pause, SkipBack, Download, Trash2, Code, Wand2, Link as LinkIcon } from "lucide-svelte";
 
   // One library score: engraved by abcjs, played through lib/scorePlayer.ts
-  // with the sounding note lit, editable as ABC, and exported as .abc,
+  // with a playhead line and the sounding note lit (a click on the sheet
+  // moves the playhead), editable as ABC, and exported as .abc,
   // .musicxml (MuseScore, Finale, Sibelius) or .mid.
   //
   // abcjs is ~400 KB, so lib/abcScore.ts (which owns it) is imported on first
@@ -97,7 +98,109 @@
       model = null;
       parseError = e instanceof Error ? e.message : String(e);
     }
+    // Untracked: layout reads pos, which must not re-engrave the sheet each frame.
+    untrack(layout);
   });
+
+  // --- playhead -----------------------------------------------------------------
+  // Times come from our own model (the clock the player runs on), places from
+  // the engraving: each onset sits at the left edge of the notes that start
+  // there, and the line is interpolated between onsets so it glides. All of it
+  // is in the SVG's own units, so the responsive viewBox scales it for free.
+  interface Mark {
+    t: number;
+    x: number;
+    sys: number;
+  }
+  interface System {
+    top: number;
+    bottom: number;
+    right: number;
+  }
+  let marks: Mark[] = [];
+  let systems: System[] = [];
+  let svg: SVGSVGElement | null = null;
+  let cursor: SVGLineElement | null = null;
+
+  function layout() {
+    marks = [];
+    systems = [];
+    cursor = null;
+    svg = sheetEl?.querySelector("svg") ?? null;
+    if (!svg || !visual || !model || !lib) return;
+    // abcjs wraps each system (all its staves) in one of these.
+    const wrappers = [...svg.querySelectorAll<SVGGElement>(".abcjs-staff-wrapper")];
+    systems = wrappers.map((g) => {
+      const b = g.getBBox();
+      return { top: b.y, bottom: b.y + b.height, right: b.x + b.width };
+    });
+    for (const p of lib.timeline(model)) {
+      let x = Infinity;
+      let sys = -1;
+      for (const c of p.chars) {
+        for (const e of visual.getElementFromChar(c)?.abselem?.elemset ?? []) {
+          const g = e as SVGGraphicsElement;
+          if (typeof g.getBBox !== "function") continue;
+          const b = g.getBBox();
+          if (!b.width && !b.height) continue;
+          if (b.x < x) {
+            x = b.x;
+            const w = g.closest(".abcjs-staff-wrapper");
+            sys = w ? wrappers.indexOf(w as SVGGElement) : -1;
+          }
+        }
+      }
+      if (sys >= 0) marks.push({ t: p.t, x, sys });
+    }
+    if (!marks.length) return;
+    cursor = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    cursor.setAttribute("class", "qm-playhead");
+    svg.appendChild(cursor);
+    place(pos);
+  }
+
+  // The span time t falls in: from the onset at or before t to the next one,
+  // or to the end of the system when the next onset starts a new system.
+  function span(i: number) {
+    const a = marks[i];
+    const b = marks[i + 1];
+    return { a, x1: b && b.sys === a.sys ? b.x : systems[a.sys].right, t1: b ? b.t : duration };
+  }
+
+  function place(t: number) {
+    if (!cursor || !marks.length) return;
+    let i = 0;
+    while (i + 1 < marks.length && marks[i + 1].t <= t) i++;
+    const { a, x1, t1 } = span(i);
+    const f = t1 > a.t ? Math.min(1, Math.max(0, (t - a.t) / (t1 - a.t))) : 0;
+    const x = a.x + (x1 - a.x) * f;
+    const sys = systems[a.sys];
+    cursor.setAttribute("x1", String(x));
+    cursor.setAttribute("x2", String(x));
+    cursor.setAttribute("y1", String(sys.top));
+    cursor.setAttribute("y2", String(sys.bottom));
+  }
+
+  // The inverse of place(): a click on a system becomes a time.
+  function seekAt(e: MouseEvent) {
+    if (!svg || !marks.length) return;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return;
+    const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse());
+    // The system under the pointer, or the nearer one in the gap between two.
+    let si = 0;
+    let best = Infinity;
+    systems.forEach((s, k) => {
+      const d = pt.y < s.top ? s.top - pt.y : pt.y > s.bottom ? pt.y - s.bottom : 0;
+      if (d < best) [best, si] = [d, k];
+    });
+    let i = marks.findIndex((m) => m.sys === si);
+    if (i < 0) return;
+    while (i + 1 < marks.length && marks[i + 1].sys === si && marks[i + 1].x <= pt.x) i++;
+    const { a, x1, t1 } = span(i);
+    const f = x1 > a.x ? Math.min(1, Math.max(0, (pt.x - a.x) / (x1 - a.x))) : 0;
+    seek(a.t + (t1 - a.t) * f);
+  }
 
   // --- playback -----------------------------------------------------------------
   let player: ScorePlayer | null = null;
@@ -114,6 +217,7 @@
   function frame() {
     if (!player?.playing) return;
     pos = player.position();
+    place(pos);
     unlight();
     for (const ev of events) {
       if (ev.start > pos) break;
@@ -136,20 +240,34 @@
       onend: () => {
         playing = false;
         pos = 0;
+        place(0);
         unlight();
       },
     });
-    player.play(0);
+    player.play(pos < duration ? pos : 0);
     playing = true;
     raf = requestAnimationFrame(frame);
   }
-  function stop() {
+  // Pause keeps the position, so Play carries on from it.
+  function pause() {
     cancelAnimationFrame(raf);
     player?.stop();
     player = null;
     playing = false;
-    pos = 0;
     unlight();
+  }
+  function stop() {
+    pause();
+    pos = 0;
+    place(0);
+  }
+  function seek(t: number) {
+    pos = Math.max(0, Math.min(t, duration));
+    place(pos);
+    if (player?.playing) {
+      unlight();
+      player.play(pos);
+    }
   }
   $effect(() => {
     player?.setVolume(volume);
@@ -206,9 +324,12 @@
       class="min-w-0 flex-1 bg-transparent text-sm font-medium text-txtmain rounded px-1 -mx-1 border border-transparent hover:border-card-border focus:border-primary focus:outline-none"
     />
     <div class="flex items-center gap-1.5 shrink-0">
+      <button class="btn btn--sm btn--icon" onclick={stop} disabled={!playing && pos === 0} use:tip={"Back to the start"} aria-label="Back to the start">
+        <SkipBack class="w-3.5 h-3.5" />
+      </button>
       {#if playing}
-        <button class="btn btn--sm inline-flex items-center gap-1.5" onclick={stop}>
-          <Square class="w-3.5 h-3.5" /> Stop
+        <button class="btn btn--sm inline-flex items-center gap-1.5" onclick={pause}>
+          <Pause class="w-3.5 h-3.5" /> Pause
         </button>
       {:else}
         <button class="btn btn--sm btn--primary inline-flex items-center gap-1.5" onclick={play} disabled={!model}>
@@ -272,7 +393,9 @@
     {#if !lib && !loadError}
       <p class="py-8 text-center text-xs text-txtsecondary">Loading the score…</p>
     {/if}
-    <div bind:this={sheetEl} class="qm-sheet text-txtmain"></div>
+    <!-- Pointer-only by design: Play/Pause and Back to the start are the keyboard path. -->
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div bind:this={sheetEl} class="qm-sheet text-txtmain cursor-pointer" onclick={seekAt}></div>
   </div>
 
   {#if score.origin || disclaimer}
@@ -297,6 +420,13 @@
 </div>
 
 <style>
+  .qm-sheet :global(.qm-playhead) {
+    stroke: var(--color-primary);
+    stroke-width: 2;
+    stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+    pointer-events: none;
+  }
   /* abcjs draws with fill/stroke attributes; the lit note overrides both. */
   .qm-sheet :global(.qm-score-hl) {
     fill: var(--color-primary);

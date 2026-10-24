@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { noteEvents, parseChordName, parseScore, pitchMidi, toMidi, toMusicXML } from "./abcScore";
+import { noteEvents, parseChordName, parseScore, pitchMidi, timeline, toMidi, toMusicXML } from "./abcScore";
 
 // The shape SheetSage2 emits: two voices written in alternating blocks, chord
 // names in quotes, Z<n> rests for a silent voice, "% section" comments.
@@ -53,6 +53,19 @@ describe("parseScore", () => {
   });
 
   // abcjs prints a sharp in a chord name as ♯; parseChordName reads both.
+  it("lists every onset once, rests included, both parts merged", () => {
+    const tl = timeline(m);
+    // Bar 1: the vocal's z8 and the first F2 begin together.
+    expect(tl[0]).toMatchObject({ t: 0 });
+    expect(tl[0].chars).toHaveLength(2);
+    for (let i = 1; i < tl.length; i++) expect(tl[i].t).toBeGreaterThan(tl[i - 1].t);
+    // Z4 is one glyph: it appears at its first bar only. 2/4 at 81 bpm is 240/81/2 s a bar.
+    const z4 = m.parts[1].measures[4].notes[0].startChar;
+    const at = tl.filter((p) => p.chars.includes(z4));
+    expect(at).toHaveLength(1);
+    expect(at[0].t).toBeCloseTo((4 * 240) / 81 / 2);
+  });
+
   it("separates chord symbols from the notes", () => {
     expect(m.parts[0].measures[0].notes[0].harmony).toEqual(["Bm"]);
     expect(m.parts[0].measures[3].notes.map((n) => n.harmony)).toEqual([["F♯"], ["F♯"]]);

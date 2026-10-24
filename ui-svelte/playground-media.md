@@ -203,6 +203,11 @@ The viewer's "Use in Create" does the same.
 - plays through `lib/scorePlayer.ts`, a WebAudio lookahead scheduler over `noteEvents`, NOT
   abcjs's synth, which fetches its soundfont from a public CDN. The sounding notes are lit via
   `getElementFromChar(startChar).abselem.elemset`. "Chords" adds a pad under the chord symbols;
+- draws a playhead: an SVG `<line>` appended to the engraved `<svg>` (viewBox units, so it scales
+  with `responsive: "resize"`). Times come from `timeline(model)` (our clock, the one the player
+  runs on, not abcjs's `setupEvents`), places from the bbox of each onset's elements, spanning
+  its `.abcjs-staff-wrapper` system, interpolated between onsets. A click maps back through
+  `getScreenCTM().inverse()` to a time and seeks; Pause keeps the position, SkipBack rewinds;
 - edits the ABC in place (saved debounced) and renames on blur;
 - exports `.abc`, `.mid` (`abcjs.synth.getMidiFile`) and `.musicxml` (`toMusicXML`).
 
