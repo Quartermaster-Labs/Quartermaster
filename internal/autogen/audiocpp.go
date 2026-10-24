@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -344,6 +345,10 @@ type audioCppCompanion struct {
 	mainOption, companionOption string
 	// files are the companion files to look for, best first.
 	files []string
+	// fullFiles replaces files for an unquantized main file (bf16/f16/f32 in its
+	// name): a full-precision model is asked for when quality is the point, so it
+	// gets the full-precision companion first.
+	fullFiles []string
 }
 
 // audioCppCompanions are the main-plus-companion families. YuE2 publishes its
@@ -355,7 +360,8 @@ type audioCppCompanion struct {
 var audioCppCompanions = map[string]audioCppCompanion{
 	"yue2": {
 		mainOption: "yue2.model_gguf", companionOption: "yue2.vae_gguf",
-		files: []string{"yue2-vae-f16.gguf", "yue2-vae-f32.gguf"},
+		files:     []string{"yue2-vae-f16.gguf", "yue2-vae-f32.gguf"},
+		fullFiles: []string{"yue2-vae-f32.gguf", "yue2-vae-f16.gguf"},
 	},
 }
 
@@ -657,7 +663,11 @@ func emitAudioCppModel(b *strings.Builder, s Settings, row GgufRow, ov *Override
 // on disk there is nothing to load, so the YAML says which file is missing.
 func emitAudioCppCompanionModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, family, task string, c audioCppCompanion, overhead float64, emitted *[]string) {
 	dir := filepath.Dir(row.FullPath)
-	for _, f := range c.files {
+	files := c.files
+	if c.fullFiles != nil && audioCppFullPrecisionRe.MatchString(row.FileName) && !audioCppOnVulkan(s, ov, family) {
+		files = c.fullFiles
+	}
+	for _, f := range files {
 		fi, err := os.Stat(filepath.Join(dir, f))
 		if err != nil || fi.IsDir() || fi.Size() <= 0 {
 			continue
@@ -668,8 +678,20 @@ func emitAudioCppCompanionModel(b *strings.Builder, s Settings, row GgufRow, ov 
 		*emitted = append(*emitted, name)
 		return
 	}
-	fmt.Fprintf(b, "\n  # SKIPPED %s: %s needs its companion %s in %s (a download may still be running)\n", name, family, strings.Join(c.files, " or "), filepath.ToSlash(dir))
+	fmt.Fprintf(b, "\n  # SKIPPED %s: %s needs its companion %s in %s (a download may still be running)\n", name, family, strings.Join(files, " or "), filepath.ToSlash(dir))
 }
+
+// audioCppOnVulkan reports whether the family is served by a Vulkan audio.cpp
+// build. YuE2's f32 VAE cannot decode there: its graph asks for one 3.6 GB
+// allocation, over the device's per-allocation limit, so Vulkan keeps f16.
+// HIP and CUDA builds have no such cap.
+func audioCppOnVulkan(s Settings, ov *Override, family string) bool {
+	be := audioCppBackend(s, ov, audioCppClass(family))
+	return audioCppFlavour(s, be.ID) == "vulkan"
+}
+
+// audioCppFullPrecisionRe matches an unquantized main file name (yue2-3b-bf16.gguf).
+var audioCppFullPrecisionRe = regexp.MustCompile(`(?i)[-_.](bf16|f16|f32)\.gguf$`)
 
 // writeAudioCppEntry writes one audiocpp_server model entry. path is what the
 // audio.cpp config names (a gguf, or a package directory), sessionOptions its
