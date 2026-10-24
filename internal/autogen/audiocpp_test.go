@@ -594,6 +594,36 @@ func TestEmitAudioCppModel_Yue2Companion(t *testing.T) {
 	}
 }
 
+// A full-precision YuE2 pairs the f32 VAE first, except on a Vulkan build,
+// where the f32 decode needs one allocation over the device limit.
+func TestEmitAudioCppModel_Yue2FullPrecisionVAE(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "Yue2-3B-GGUF")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"yue2-3b-bf16.gguf", "yue2-3b-q8_0.gguf", "yue2-vae-f16.gguf", "yue2-vae-f32.gguf"} {
+		writeGgufKVs(t, filepath.Join(dir, f), [][2]any{
+			{"general.architecture", "audiocpp"},
+			{"audiocpp.model_spec.family", "yue2"},
+		})
+	}
+	meta := Metadata{Architecture: "audiocpp", AudioFamily: "yue2"}
+	cases := []struct{ variant, main, vae string }{
+		{"rocm", "yue2-3b-bf16.gguf", "yue2-vae-f32.gguf"},
+		{"cuda", "yue2-3b-bf16.gguf", "yue2-vae-f32.gguf"},
+		{"vulkan", "yue2-3b-bf16.gguf", "yue2-vae-f16.gguf"},
+		{"rocm", "yue2-3b-q8_0.gguf", "yue2-vae-f16.gguf"},
+	}
+	for _, c := range cases {
+		var b strings.Builder
+		var emitted []string
+		emitAudioCppModel(&b, audioCppSettings(c.variant), miniMaxRow(filepath.Join(dir, c.main)), &Override{}, "yue2", meta, &emitted)
+		if want := `yue2.vae_gguf: "` + c.vae + `"`; !strings.Contains(b.String(), want) {
+			t.Errorf("%s %s: want %s in:\n%s", c.variant, c.main, want, b.String())
+		}
+	}
+}
+
 func TestEmitAudioCppModel_Transcription(t *testing.T) {
 	s := audioCppSettings("vulkan")
 	row := audioCppRow("/models/music/sheetsage2-orig.gguf")
