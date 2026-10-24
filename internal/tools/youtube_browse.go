@@ -579,7 +579,7 @@ func clampInt(v, lo, hi, def int) int {
 // "exit status 1".
 func ytDlpErr(err error) string {
 	if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
-		return firstLine(string(ee.Stderr))
+		return dlpError(string(ee.Stderr))
 	}
 	return err.Error()
 }

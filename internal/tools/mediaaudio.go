@@ -100,7 +100,7 @@ func FetchMediaAudio(ctx context.Context, target string) (MediaAudio, error) {
 		case ctx.Err() != nil:
 			return MediaAudio{}, fmt.Errorf("yt-dlp timed out after %s", mediaAudioTimeout)
 		case runErr != nil:
-			return MediaAudio{}, fmt.Errorf("yt-dlp failed: %s", firstLine(string(out)))
+			return MediaAudio{}, fmt.Errorf("yt-dlp failed: %s", dlpError(string(out)))
 		case res.Duration > MaxMediaAudioSeconds:
 			return MediaAudio{}, fmt.Errorf("%s is %d min long; references are capped at %d min", t.Site, res.Duration/60, MaxMediaAudioSeconds/60)
 		}

@@ -203,3 +203,22 @@ func TestTools_FormatTranscriptBudget(t *testing.T) {
 		t.Errorf("ceiling not enforced: %d vs %d", len(got), len(big))
 	}
 }
+
+func TestDlpError(t *testing.T) {
+	// The real output of an age-restricted video: the reason is the LAST line,
+	// the first is progress.
+	ageGated := "[youtube] Extracting URL: https://www.youtube.com/watch?v=pj5edzCB6Ks\n" +
+		"[youtube] pj5edzCB6Ks: Downloading webpage\n" +
+		"ERROR: [youtube] pj5edzCB6Ks: Sign in to confirm your age. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ  for how to manually pass cookies.\n"
+	cases := []struct{ name, in, want string }{
+		{"error line wins over progress", ageGated, "Sign in to confirm your age."},
+		{"no prefix", "ERROR: Unsupported URL: https://x.example/\n", "Unsupported URL: https://x.example/"},
+		{"no error line", "something odd\nmore", "something odd"},
+		{"empty", "", "no output"},
+	}
+	for _, c := range cases {
+		if got := dlpError(c.in); got != c.want {
+			t.Errorf("%s: dlpError = %q, want %q", c.name, got, c.want)
+		}
+	}
+}

@@ -374,7 +374,7 @@ func GetTranscript(ctx context.Context, target, lang string) (Transcript, error)
 		// itself failed. Surface the real reason -- an empty transcript the model
 		// narrates over is the worst outcome.
 		if runErr != nil {
-			return Transcript{}, fmt.Errorf("yt-dlp failed: %s", firstLine(string(stderr)))
+			return Transcript{}, fmt.Errorf("yt-dlp failed: %s", dlpError(string(stderr)))
 		}
 		return Transcript{}, fmt.Errorf("no %s subtitles available for this %s page (none published, and the site produced no auto-captions). Not every site has captions - say so plainly rather than guessing what was said", lang, t.Site)
 	}
@@ -601,6 +601,30 @@ func ytCachePut(key string, tr Transcript) {
 		delete(ytCache.m, oldest)
 	}
 	ytCache.m[key] = ytCacheEntry{tr: tr, at: time.Now()}
+}
+
+// dlpError picks the reason out of yt-dlp's output. Its first line is usually
+// progress ("[youtube] Extracting URL: ..."), and the reason is the ERROR: line
+// that comes after it. The extractor prefix and the cookie advice are dropped:
+// neither means anything to someone reading it in the playground.
+func dlpError(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line, ok := strings.CutPrefix(strings.TrimSpace(lines[i]), "ERROR: ")
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			if _, rest, found := strings.Cut(line, ": "); found {
+				line = rest
+			}
+		}
+		if before, _, found := strings.Cut(line, " Use --cookies"); found {
+			line = before
+		}
+		return firstLine(line)
+	}
+	return firstLine(s)
 }
 
 func firstLine(s string) string {
