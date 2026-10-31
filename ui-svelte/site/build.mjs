@@ -1235,6 +1235,8 @@ const SHOT_SOURCE = {
   "pg-tools.webp": "pg-tools",
   "pg-image.webp": "pg-image",
   "pg-speech.webp": "pg-speech",
+  "pg-music.webp": "pg-music",
+  "pg-decision.webp": "pg-decision",
 };
 
 // The shots harness captures at device scale, which on this machine means

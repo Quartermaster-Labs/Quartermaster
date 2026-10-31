@@ -27,7 +27,7 @@
 // context refuses every write.
 import { chromium } from "playwright";
 import { buildDemo, installDemo, pickImageModel, pickModel, recordCatalog } from "./shot-demo.mjs";
-import { buildPlayground, installPlayground, pgStorage, CHAT_ID, SHOP_ID, IMAGE_ID, SPEECH_ID } from "./shot-playground.mjs";
+import { buildPlayground, installPlayground, pgStorage, CHAT_ID, SHOP_ID, IMAGE_ID, SPEECH_ID, MUSIC_ID } from "./shot-playground.mjs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -353,6 +353,37 @@ const SHOTS = [
     focus: SPEECH_ID,
     settleExtra: 1200,
   },
+  {
+    name: "pg-music",
+    app: "playground",
+    wait: "main, textarea",
+    storage: pgStorage("music"),
+    focus: MUSIC_ID,
+    // Every take and stem is a 30 s clip decoded for its waveform.
+    settleExtra: 1800,
+  },
+  {
+    name: "pg-decision",
+    app: "playground",
+    wait: "main, textarea",
+    storage: pgStorage("decision"),
+    settleExtra: 600,
+    // The tab is stateless, so the answer only exists after a run. The fixture
+    // route answers /v1/systemone itself, so this click loads no model.
+    prepare: async (p) => {
+      const run = p.locator("button.btn--primary:has-text('Run')").first();
+      if (!(await run.count()) || (await run.isDisabled())) return "Run is missing or disabled: no decision model in the catalog";
+      await run.click();
+      // An outdated-backend check asks before running; the shot is of the answer.
+      const anyway = p.locator("button:has-text('Load anyway'), button:has-text('Run anyway')").first();
+      if (await anyway.isVisible().catch(() => false)) await anyway.click();
+      // Off the button, or its "Run (Ctrl+Enter)" tooltip is in the picture.
+      // Not to the corner: the side rail expands on hover.
+      await p.mouse.move(1100, 600);
+      await p.locator("text=/tokens in/").first().waitFor({ timeout: 10000 });
+      await p.waitForTimeout(400);
+    },
+  },
 ];
 
 /**
@@ -552,6 +583,10 @@ async function main() {
         model: demo?.model ?? pickModel(models),
         imageModel: pickImageModel(models),
         speechModel: models.find((m) => m.capabilities?.audio_speech),
+        musicModel: models.find((m) => m.capabilities?.music_generation),
+        musicEditModel: models.find((m) => m.capabilities?.music_edit),
+        stemsModel: models.find((m) => m.capabilities?.audio_separation),
+        decisionModel: models.find((m) => m.capabilities?.decisions),
         imageTurns: await loadImageTurns(opts, models),
       });
       console.log(`  playground: ${opts.playgroundUrl} as "${playground.user}" (canned threads, writes refused)`);

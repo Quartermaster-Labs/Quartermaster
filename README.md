@@ -157,7 +157,14 @@ else installed in front of it.
   until the clip lands and closing the tab does not kill it; chain a clip's last frame into the
   next to get past what one render can fit in VRAM.
 - **Speech without leaving the tab.** Text to speech against your local voices, and transcription
-  back the other way.
+  back the other way, with word timestamps when you ask for them.
+- **Music.** Songs from a description and lyrics (ACE-Step, MiniMax Music 3, YuE2), edits that
+  repaint one stretch of a take or cover it in another style, and HTDemucs to split any take into
+  vocals, drums, bass and the rest. Every take records the seed it was made with, so it can be made
+  again.
+- **Decision models.** A tab for models that answer with probabilities instead of prose: give one a
+  state and a question (pick an option, rate on a scale, true or false) and see how sure it is of
+  each answer, before wiring the same request into your own code via `/v1/systemone`.
 - **History is server-side per user**, not localStorage, so it survives a browser and follows the
   login rather than the machine.
 
@@ -165,6 +172,8 @@ else installed in front of it.
 |---|---|
 | ![Tools and web search](docs/assets/pg-tools.webp) | ![Image generation](docs/assets/pg-image.webp) |
 | Tool calls and web search, mid-conversation | Diffusion models, driven from the same UI |
+| ![Music](docs/assets/pg-music.webp) | ![Decision models](docs/assets/pg-decision.webp) |
+| A song, a repainted chorus and its four stems | A decision model's answer, as probabilities |
 
 ## Finding and keeping models
 

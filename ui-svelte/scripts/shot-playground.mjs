@@ -282,6 +282,107 @@ function speechWav(seconds, seed = 1) {
   return `data:audio/wav;base64,${Buffer.concat([head, data]).toString("base64")}`;
 }
 
+// A stand-in song for the Music tab, built the same way as speechWav: the card
+// decodes the clip to draw its waveform, and a sine would draw a flat bar that
+// reads as broken. Four parts on a 96 BPM grid with a quiet intro, a fuller
+// verse and a drop before the last bars, so the waveform has the sections a
+// real take has. `part` picks one stem ("drums", "bass", "vocals", "other") or,
+// left empty, the mix of all four, which is what a separated take's stems add
+// back up to.
+function songWav(seconds, seed = 1, part = "") {
+  const rate = 16000;
+  const n = Math.round(rate * seconds);
+  const data = Buffer.alloc(n * 2);
+  let s = seed >>> 0;
+  const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296) * 2 - 1;
+  const beat = 60 / 96;
+  const roots = [110, 87.31, 130.81, 98]; // A, F, C, G: one chord per bar
+  const has = (p) => !part || part === p;
+  for (let i = 0; i < n; i++) {
+    const t = i / rate;
+    const b = t / beat;
+    const bar = Math.floor(b / 4);
+    const inBeat = (b % 1) * beat;
+    const root = roots[bar % 4];
+    // Intro (2 bars) is pads only; the 2 bars before the end drop the drums.
+    const intro = bar < 2;
+    const drop = t > seconds - 8 * beat;
+    const fade = Math.min(1, (seconds - t) * 0.8, t * 2);
+    let v = 0;
+    if (has("drums") && !intro && !drop) {
+      const kick = Math.floor(b) % 2 === 0 ? Math.exp(-inBeat * 22) * Math.sin(2 * Math.PI * 55 * inBeat) : 0;
+      const snare = Math.floor(b) % 2 === 1 ? Math.exp(-inBeat * 30) * rnd() * 0.6 : 0;
+      const hat = Math.exp(-((b * 2) % 1) * beat * 80) * rnd() * 0.15;
+      v += kick * 0.9 + snare + hat;
+    }
+    if (has("bass") && !intro) v += Math.sin(2 * Math.PI * root * t) * 0.35 * (0.6 + 0.4 * Math.exp(-inBeat * 4));
+    if (has("vocals") && !intro && !drop) {
+      // Two bars sung, half a bar of breath.
+      const phrase = b % 8 < 6.5 ? 1 : 0;
+      const syl = Math.max(0, Math.sin(2 * Math.PI * 2.4 * t)) ** 0.5;
+      const f = root * 4 * (1 + 0.006 * Math.sin(2 * Math.PI * 5.5 * t));
+      v += phrase * syl * (Math.sin(2 * Math.PI * f * t) * 0.3 + Math.sin(4 * Math.PI * f * t) * 0.1);
+    }
+    if (has("other")) {
+      const pad = Math.sin(2 * Math.PI * root * 2 * t) + Math.sin(2 * Math.PI * root * 2.5 * t) + Math.sin(2 * Math.PI * root * 3 * t);
+      v += pad * 0.07 * (intro ? 1.4 : 1);
+    }
+    // Verse, chorus, verse...: four bars each, the chorus louder, so the card's
+    // waveform shows the song's shape rather than one even block.
+    const section = intro ? 0.5 : drop ? 0.45 : Math.floor((bar - 2) / 4) % 2 ? 1 : 0.55;
+    v *= fade * section * 0.85;
+    data.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(v * 32767))), i * 2);
+  }
+  const head = Buffer.alloc(44);
+  head.write("RIFF", 0);
+  head.writeUInt32LE(36 + data.length, 4);
+  head.write("WAVEfmt ", 8);
+  head.writeUInt32LE(16, 16);
+  head.writeUInt16LE(1, 20); // PCM
+  head.writeUInt16LE(1, 22); // mono
+  head.writeUInt32LE(rate, 24);
+  head.writeUInt32LE(rate * 2, 28);
+  head.writeUInt16LE(2, 32);
+  head.writeUInt16LE(16, 34);
+  head.write("data", 36);
+  head.writeUInt32LE(data.length, 40);
+  return `data:audio/wav;base64,${Buffer.concat([head, data]).toString("base64")}`;
+}
+
+const MUSIC_PROMPT = "warm indie folk, fingerpicked acoustic guitar, brushed drums, upright bass, female vocal, 96 bpm";
+const MUSIC_LYRICS = `[verse]
+Kettle on the window ledge
+Frost is writing on the glass
+Every Sunday starts the same
+Slow enough to let it pass
+
+[chorus]
+Stay a little, stay a while
+Morning's only half awake`;
+
+// What the Decision tab is asked, and what the canned run answers. A support
+// ticket routed to a queue is the plainest "state in, distribution out" example
+// there is, and three options keep the bars readable.
+const DECISION_STATE = `Customer writes: "I was charged twice for my October invoice, the second charge is still pending on my card. Can you cancel it before it goes through?"`;
+const DECISION_QUESTION = {
+  uid: "shotq",
+  id: "answer",
+  type: "choice",
+  instructions: "Which team should handle this ticket?",
+  choices: [
+    { option: "billing", description: "Payments, refunds, invoices" },
+    { option: "technical", description: "Bugs, outages, account access" },
+    { option: "sales", description: "Plans, upgrades, quotes" },
+  ],
+  levels: ["", ""],
+  trueDesc: "",
+  falseDesc: "",
+};
+const DECISION_ANSWER = {
+  answers: { answer: { type: "choice", choice: "billing", probabilities: { billing: 0.941, technical: 0.043, sales: 0.016 } } },
+  usage: { input_tokens: 212, output_tokens: 1 },
+};
+
 // Ids are fixed strings rather than the app's own time-based ones: the harness
 // seeds localStorage with the id of the thread each shot opens, so it has to
 // know it in advance, and a stable id keeps two runs diffable.
@@ -289,6 +390,7 @@ export const CHAT_ID = "shot-chat";
 export const SHOP_ID = "shot-shop";
 export const IMAGE_ID = "shot-image";
 export const SPEECH_ID = "shot-speech";
+export const MUSIC_ID = "shot-music";
 
 /**
  * Builds every fixture a playground run needs.
@@ -300,7 +402,7 @@ export const SPEECH_ID = "shot-speech";
  * cannot be faked. Each turn after the first is an edit of the one before it,
  * so it carries that picture as its reference, as a follow-up prompt does.
  */
-export function buildPlayground({ model, imageModel, speechModel, imageTurns = [] } = {}) {
+export function buildPlayground({ model, imageModel, speechModel, musicModel, musicEditModel, stemsModel, decisionModel, imageTurns = [] } = {}) {
   const now = Date.now();
   const id = model?.id ?? "";
   const stamp = (m) => (m.role === "assistant" ? { ...m, model: m.model || id } : m);
@@ -374,6 +476,34 @@ export function buildPlayground({ model, imageModel, speechModel, imageTurns = [
     },
   ];
 
+  // Create, then a repaint of the chorus, then that take split into stems: the
+  // three things the tab does, in the order someone would do them.
+  const MUSIC_SECS = 30;
+  const takes = [
+    { task: "generate", model: musicModel?.id ?? "", prompt: MUSIC_PROMPT, lyrics: MUSIC_LYRICS, duration: MUSIC_SECS, seed: 2718281828, secs: 41, audio: songWav(MUSIC_SECS, 1) },
+  ];
+  if (musicEditModel) {
+    takes.push({ task: "repaint", model: musicEditModel.id, prompt: "same song, chorus sung as a duet with a male harmony", lyrics: MUSIC_LYRICS, source: takes[0].audio, sourceLabel: "Take 1", start: 18, end: -1, seed: 1414213562, secs: 23, audio: songWav(MUSIC_SECS, 2) });
+  }
+  if (stemsModel) {
+    const from = takes.length;
+    takes.push({
+      task: "separate",
+      model: stemsModel.id,
+      prompt: "",
+      source: takes.at(-1).audio,
+      sourceLabel: `Take ${from}`,
+      secs: 9,
+      stems: ["vocals", "drums", "bass", "other"].map((name) => ({ name, audio: songWav(MUSIC_SECS, from + 1, name) })),
+    });
+  }
+  const musicChats = musicModel
+    ? [
+        { id: MUSIC_ID, title: "Sunday kettle song", titled: true, updatedAt: now - 8 * 60_000, turns: takes },
+        { id: "shot-music-old", title: "lo-fi beat for a study playlist", titled: true, updatedAt: now - 30 * 3600_000, turns: takes.slice(0, 1) },
+      ]
+    : [];
+
   // Only what changes the picture. Everything else falls back to the store's own
   // default, which is what a real user sees on their first day anyway.
   const prefs = {
@@ -390,6 +520,14 @@ export function buildPlayground({ model, imageModel, speechModel, imageTurns = [
     ...(speechModel && /kokoro/i.test(speechModel.id)
       ? { "playground-speech-voices-cache-v4": { [speechModel.id]: ["", ...KOKORO_VOICES] } }
       : {}),
+    "playground-music-model": musicModel?.id ?? "",
+    "playground-music-edit-model": musicEditModel?.id ?? "",
+    "playground-music-stems-model": stemsModel?.id ?? "",
+    "playground-music-mode": "create",
+    "playground-music-lyrics": MUSIC_LYRICS,
+    "playground-decision-model": decisionModel?.id ?? "",
+    "playground-decision-state": DECISION_STATE,
+    "playground-decision-questions": [DECISION_QUESTION],
     "playground-shopping-prefs": "Germany, EUR, prefer shops that ship within the EU",
     // The Images tab photographs whatever image model the catalog offers, and an
     // SDXL-anime model auto-fills the booru quality-tag negative (SDXL_ANIME_NEG
@@ -399,7 +537,7 @@ export function buildPlayground({ model, imageModel, speechModel, imageTurns = [
     "playground-sdapi-negative-prompt": "blurry, low quality, watermark, text",
   };
 
-  return { user: PG_USER, chats, imageChats, speechChats, prefs, memories: [] };
+  return { user: PG_USER, chats, imageChats, speechChats, musicChats, prefs, memories: [], decision: DECISION_ANSWER };
 }
 
 /**
@@ -443,6 +581,11 @@ export async function installPlayground(context, fixture, onWrite = () => {}) {
     "/api/chats": fixture.chats,
     "/api/imagechats": fixture.imageChats,
     "/api/speechchats": fixture.speechChats,
+    "/api/musicchats": fixture.musicChats,
+    // No shot opens these tabs, but their stores hydrate on every load, and a
+    // GET let through would pull the real user's threads into the page.
+    "/api/videochats": [],
+    "/api/3dchats": [],
     "/api/prefs": fixture.prefs,
     "/api/memories": fixture.memories,
     // Whether a turn is running is asked on mount. The honest answer for a
@@ -461,6 +604,15 @@ export async function installPlayground(context, fixture, onWrite = () => {}) {
     // store PUTs its WHOLE array back on any change, and the server takes that
     // as the new truth -- one escaped PUT replaces a real user's history with
     // these four demo threads and GCs the media of everything that vanished.
+    // The one POST that is answered rather than refused: a decision run reads
+    // nothing and writes nothing, and the Decision shot is of its answer. Canned
+    // so the shot never loads the model (a refused `{}` would render as an error).
+    if (method === "POST" && pathname === "/v1/systemone") {
+      // Delayed, because the panel prints the measured round trip, and an
+      // instant reply reads "6 ms incl. model load", which no real run shows.
+      const body = JSON.stringify({ model: fixture.prefs["playground-decision-model"], ...fixture.decision });
+      return new Promise((r) => setTimeout(r, 1300)).then(() => route.fulfill({ contentType: "application/json", body }));
+    }
     if (method !== "GET" && method !== "HEAD") {
       onWrite(`${method} ${pathname}`);
       return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
@@ -491,7 +643,7 @@ export async function installPlayground(context, fixture, onWrite = () => {}) {
   return {
     focus(id) {
       if (!id) return;
-      for (const list of [fixture.chats, fixture.imageChats, fixture.speechChats]) {
+      for (const list of [fixture.chats, fixture.imageChats, fixture.speechChats, fixture.musicChats]) {
         if (!list.some((s) => s.id === id)) continue;
         const rest = list.filter((s) => s.id !== id).sort((a, b) => b.updatedAt - a.updatedAt);
         const top = Math.max(...list.map((s) => s.updatedAt));
