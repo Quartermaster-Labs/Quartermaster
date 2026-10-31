@@ -22,7 +22,9 @@ func TestAsrEngineOf(t *testing.T) {
 	}{
 		{"audio.cpp asr", config.ModelConfig{AudioCpp: config.AudioCppConfig{Family: "qwen3_asr", Task: "asr"}}, asrAudioCpp},
 		{"audio.cpp tts", config.ModelConfig{AudioCpp: config.AudioCppConfig{Family: "kokoro", Task: "tts"}}, asrPassthrough},
-		{"parakeet", config.ModelConfig{Cmd: "E:\\Apps\\parakeet-v0.4.0\\parakeet-server.exe\n--model D:/m.gguf\n--port 5000"}, asrParakeet},
+		// Forward slashes: off Windows the cmd splits as POSIX shell words, where
+		// a backslash is an escape and E:\Apps\... would lose its separators.
+		{"parakeet", config.ModelConfig{Cmd: "E:/Apps/parakeet-v0.4.0/parakeet-server.exe\n--model D:/m.gguf\n--port 5000"}, asrParakeet},
 		{"other", config.ModelConfig{Cmd: "whisper-server --model m.bin"}, asrPassthrough},
 	}
 	for _, c := range cases {
