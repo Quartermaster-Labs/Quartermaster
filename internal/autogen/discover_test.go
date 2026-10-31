@@ -6,9 +6,19 @@ import (
 	"testing"
 )
 
+// writeStub creates a zero-filled file of the given size. It is sparse: the
+// tests only stat the size, and building it with make([]byte, size) cost the
+// full size in heap (more under -race) plus the same again in RAM where /tmp is
+// tmpfs. Two 4 GB stubs that way ran the ubuntu-26.04 runner out of memory, and
+// the runner was shut down mid-test with no failure reported.
 func writeStub(t *testing.T, dir, name string, size int) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), make([]byte, size), 0o644); err != nil {
+	f, err := os.Create(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := f.Truncate(int64(size)); err != nil {
 		t.Fatal(err)
 	}
 }
