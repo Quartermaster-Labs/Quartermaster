@@ -16,7 +16,7 @@ Everything is registered in `routes` (`server.go`). Model-dispatched routes (`mo
   `/v1/audio/transcriptions` is wrapped by `handleTranscription` (`transcribe.go`) for two
   engines. An audio.cpp ASR asked for `response_format=verbose_json` with
   `timestamp_granularities[]=word|segment` is rewritten to JSON on audio.cpp's
-  `/v1/audio/transcriptions/details` (staged 16 kHz mono file, `options.return_timestamps`)
+  `/v1/audio/transcriptions/details` (staged 16 kHz mono file, `options.return_timestamps` + `audio_chunk_mode: fixed`)
   and answered as OpenAI verbose_json (`words` in seconds, `segments` split on 0.8 s gaps);
   anything else is forwarded as sent. parakeet-server gets its upload as 16 kHz mono PCM16,
   and its verbose_json segments rebuilt from words.

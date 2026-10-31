@@ -183,7 +183,7 @@ func TestTranscribeWithTimestamps_SendsDetailsJSON(t *testing.T) {
 		if err := json.Unmarshal(raw, &body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Model != "qwen3-asr-id" || body.Language != "English" || body.Options["return_timestamps"] != "true" {
+		if body.Model != "qwen3-asr-id" || body.Language != "English" || body.Options["return_timestamps"] != "true" || body.Options["audio_chunk_mode"] != "fixed" {
 			t.Errorf("upstream body = %s", raw)
 		}
 		staged = body.AudioPath

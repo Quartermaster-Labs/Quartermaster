@@ -146,7 +146,11 @@ func (s *Server) transcribeWithTimestamps(next http.Handler, w http.ResponseWrit
 		// The id the materialized audio.cpp config names (audiocppconfig.go).
 		"model":      modelID,
 		"audio_path": path,
-		"options":    map[string]string{"return_timestamps": "true"},
+		// Fixed chunks, not the default: with return_timestamps audio.cpp's
+		// "auto" mode chunks by Silero VAD, a speech detector that drops sung
+		// passages (a 167 s song kept 11 of 113 words). Fixed 15 s windows keep
+		// everything, though a word on a window edge can still go missing.
+		"options": map[string]string{"return_timestamps": "true", "audio_chunk_mode": "fixed"},
 	}
 	if v := formValue(form, "language"); v != "" {
 		req["language"] = v

@@ -127,7 +127,11 @@ Also here: `turns_design.md` — the turn runner's design notes.
   costs real time and `return_timestamps` is deliberately not a session default. The audio is
   always sent at **16 kHz mono**, and that is correctness, not thrift: audio.cpp rescales
   chunked word spans to the model's 16 kHz but reports the INPUT rate as `sample_rate`, so a
-  48 kHz upload would read back every time at a third of its value. parakeet-server gets the
+  48 kHz upload would read back every time at a third of its value. The request also pins
+  `audio_chunk_mode: fixed`: with `return_timestamps` audio.cpp's `auto` mode chunks by Silero
+  VAD, which is a speech detector and dropped most of a song (11 of 113 words). Fixed 15 s
+  windows keep it all, but audio.cpp gives each window only 1 s of overlap, so a word on a
+  window edge can still go missing (upstream; 30 s windows just move the losses). parakeet-server gets the
   same normalization (a 48 kHz stereo song was a 502 with an empty body there), and its
   verbose_json, which is one segment for the whole file, has its segments rebuilt from words.
 - **The config editor is `-generate`-only** — every handler 501s when `s.autogen == nil`.
