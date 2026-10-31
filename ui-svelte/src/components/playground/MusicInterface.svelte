@@ -1215,13 +1215,16 @@
               <p>Describe a song below and press Enter. Each take lands here,<br />and any take can be repainted, covered, split into stems or turned into a score.</p>
             </div>
           {:else}
-            <div class="grid grid-cols-1 xl:grid-cols-2 gap-2.5 content-start pb-4">
+            <!-- items-start: a stretched grid row padded the shorter card out to its
+                 neighbour's height, half of it empty. A stems take is four
+                 players tall, so it takes the whole row instead of a column. -->
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-2.5 content-start items-start pb-4">
               {#each pagedTurns as item (item.ti)}
                 {@const t = item.t}
                 {@const ti = item.ti}
                 {@const done = !!(t.audio || t.stems || (t.task === "transcribe" && t.score))}
                 {@const pending = !done && !t.error && gen?.id === $activeMusicChatId && gen?.ti === ti}
-                <div class="relative min-w-0 rounded-[0.625rem] border border-card-border bg-surface p-3 flex flex-col gap-2 {menuIdx === ti ? 'z-30' : ''}">
+                <div class="relative min-w-0 rounded-[0.625rem] border border-card-border bg-surface p-3 flex flex-col gap-2 {t.stems ? 'xl:col-span-2' : ''} {menuIdx === ti ? 'z-30' : ''}">
                   <p class="text-[0.8125rem] leading-snug text-txtmain whitespace-pre-wrap line-clamp-2 min-h-[2.25rem] pr-6">
                     {#if t.task === "separate"}
                       <span class="text-txtsecondary">Stems of</span> {t.sourceLabel || "a clip"}

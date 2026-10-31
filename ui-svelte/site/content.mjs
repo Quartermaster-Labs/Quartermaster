@@ -111,6 +111,8 @@ export const HOME = {
       "and shows you what it looked at.",
     "Describe a picture and it draws it, or hand it a photo to change.",
     "Talk to it instead of typing, and have answers read out loud.",
+    "Describe a song and give it lyrics, and it writes and sings it. Then redo the chorus, or pull " +
+      "the vocals and the drums apart.",
     "Shopping mode compares prices across stores and lists what it found.",
     "Everyone in the house gets their own login and their own chat history, from any phone or " +
       "laptop on your home network.",
@@ -124,6 +126,7 @@ export const HOME = {
     { file: "pg-tools.webp", label: "Web search", caption: "Looking something up mid-conversation and reading the page it found." },
     { file: "pg-image.webp", label: "Pictures", caption: "Make an image from a description, or change one you already have." },
     { file: "pg-speech.webp", label: "Voice", caption: "Have text read aloud, or turn a recording into text." },
+    { file: "pg-music.webp", label: "Music", caption: "A song from a description and lyrics, a second take of its chorus, and the four parts it is made of." },
   ],
 };
 
@@ -243,6 +246,7 @@ export const ICONS = {
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-4.6-4.6a2 2 0 0 0-2.8 0L3 21"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
+  split: '<path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3"/><path d="m15 9 6-6"/>',
 };
 
 // Platform marks. These are FILLED closed paths, not stroke outlines, so
@@ -345,6 +349,31 @@ export const SHOWCASE = [
     shots: [
       { file: "browse.webp", label: "Model hub", caption: "Search, pick a quant, download into your models folder." },
       { file: "models.webp", label: "Manage models", caption: "Every discovered model, grouped by GGUF, with its variants under it." },
+    ],
+  },
+  {
+    id: "decision",
+    icon: "split",
+    eyebrow: "Decision models",
+    title: "Answers as probabilities, not paragraphs",
+    body:
+      "Some questions want a label, not an essay: which queue a ticket goes to, whether a message is " +
+      "spam, how urgent something is on a scale of one to five. Decision models answer exactly that. " +
+      "Give one a state and a question, and it returns a probability for every answer it was allowed " +
+      "to give, so your code branches on a number instead of parsing prose.",
+    points: [
+      "Three question shapes: pick one of several named options, rate on an ordered scale, or say " +
+        "how likely a statement is to be true.",
+      "Served on llama-server's /v1/systemone, discovered and configured like any other model, and " +
+        "kept out of the chat pickers so they are never mistaken for one.",
+      "The playground has a tab for writing and testing a question before you wire it into anything.",
+    ],
+    shots: [
+      {
+        file: "pg-decision.webp",
+        label: "Decision tab",
+        caption: "A support ticket in, three queues to choose from, and the model's confidence in each.",
+      },
     ],
   },
   {
@@ -468,7 +497,7 @@ export const CLIENTS = [
     tab: "curl",
     title: "Images and audio too",
     body:
-      "It is the same port for everything in the catalog. Image generation, speech, transcription, " +
+      "It is the same port for everything in the catalog. Image generation, speech, music, transcription, " +
       "embeddings and rerank sit on their usual OpenAI paths, so a request for an image model swaps " +
       "it in the same way a chat request does.",
     label: "shell",
