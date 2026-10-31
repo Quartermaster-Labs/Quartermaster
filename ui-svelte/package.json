@@ -28,8 +28,8 @@
     "svelte-check": "^4.1.4",
     "tailwindcss": "^4.1.8",
     "typescript": "~5.8.3",
-    "vite": "^8.0.0",
-    "vitest": "^4.1.11"
+    "vite": "^8.3.5",
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
@@ -38,7 +38,7 @@
     "abcjs": "^6.7.2",
     "chart.js": "4.5.1",
     "highlight.js": "^11.11.1",
-    "katex": "^0.16.28",
+    "katex": "^0.18.2",
     "lucide-svelte": "^0.563.0",
     "mermaid": "^11.16.1",
     "pdfjs-dist": "^6.2.108",
@@ -52,5 +52,8 @@
     "three": "^0.186.0",
     "unified": "^11.0.5",
     "unist-util-visit": "^5.1.0"
+  },
+  "overrides": {
+    "katex": "$katex"
   }
 }
