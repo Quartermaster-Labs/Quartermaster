@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,22 +16,49 @@ func clearSearchCache() {
 	searchCache.mu.Unlock()
 }
 
+// fakeUpstream answers the shared web-search client from in-process handlers,
+// keyed by host, for the length of one test. No socket is opened: these tests
+// are about the chain's rules, and a loopback httptest server twice stalled
+// past the 12s hop deadline on the Windows CI runner (2026-10-15, 10-31),
+// failing a test whose logic was fine. The dial guard needs real sockets and
+// keeps them in dialguard_test.go.
+func fakeUpstream(t *testing.T, hosts map[string]http.HandlerFunc) {
+	t.Helper()
+	prev := webSearchClient.Transport
+	webSearchClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		h, ok := hosts[r.URL.Host]
+		if !ok {
+			return nil, fmt.Errorf("fakeUpstream: no handler for %s", r.URL.Host)
+		}
+		rec := httptest.NewRecorder()
+		h(rec, r)
+		res := rec.Result()
+		res.Request = r
+		return res, nil
+	})
+	t.Cleanup(func() { webSearchClient.Transport = prev })
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
 func TestTools_SearchChainFailsOver(t *testing.T) {
 	clearSearchCache()
 	// SearXNG that always errors → the chain must fall through to the next
 	// provider rather than failing the search.
-	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "engine suspended", http.StatusInternalServerError)
-	}))
-	defer dead.Close()
-	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"results":[{"title":"T","url":"https://e.com","content":"C"}]}`))
-	}))
-	defer good.Close()
+	fakeUpstream(t, map[string]http.HandlerFunc{
+		"dead.test": func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "engine suspended", http.StatusInternalServerError)
+		},
+		"good.test": func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"results":[{"title":"T","url":"https://e.com","content":"C"}]}`))
+		},
+	})
 
 	res, who, err := Search(context.Background(), []SearchProvider{
-		{ID: "searxng", Enabled: true, BaseURL: dead.URL},
-		{ID: "searxng", Enabled: true, BaseURL: good.URL},
+		{ID: "searxng", Enabled: true, BaseURL: "http://dead.test"},
+		{ID: "searxng", Enabled: true, BaseURL: "http://good.test"},
 	}, "hello", 5)
 	if err != nil {
 		t.Fatalf("chain: %v", err)
@@ -65,18 +93,18 @@ func TestTools_SearchChainEmptyIsAFailure(t *testing.T) {
 	clearSearchCache()
 	// A provider answering 200 with zero results is a failure for chain purposes
 	// — otherwise a rate-limited scraper's empty page ends the search.
-	empty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"results":[]}`))
-	}))
-	defer empty.Close()
-	full := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"results":[{"title":"T","url":"https://x.com","content":"C"}]}`))
-	}))
-	defer full.Close()
+	fakeUpstream(t, map[string]http.HandlerFunc{
+		"empty.test": func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"results":[]}`))
+		},
+		"full.test": func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"results":[{"title":"T","url":"https://x.com","content":"C"}]}`))
+		},
+	})
 
 	res, _, err := Search(context.Background(), []SearchProvider{
-		{ID: "searxng", Enabled: true, BaseURL: empty.URL},
-		{ID: "searxng", Enabled: true, BaseURL: full.URL},
+		{ID: "searxng", Enabled: true, BaseURL: "http://empty.test"},
+		{ID: "searxng", Enabled: true, BaseURL: "http://full.test"},
 	}, "empties", 5)
 	if err != nil || len(res) != 1 {
 		t.Fatalf("got %v %+v", err, res)
@@ -117,17 +145,21 @@ func TestTools_DDGUnwrap(t *testing.T) {
 
 func TestTools_BraveAndGoogleParse(t *testing.T) {
 	clearSearchCache()
-	brave := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Subscription-Token") != "kk" {
-			t.Errorf("missing token header")
-		}
-		w.Write([]byte(`{"web":{"results":[{"title":"B","url":"https://b.com","description":"a <strong>hit</strong> here"}]}}`))
-	}))
-	defer brave.Close()
+	fakeUpstream(t, map[string]http.HandlerFunc{
+		"brave.test": func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("X-Subscription-Token") != "kk" {
+				t.Errorf("missing token header")
+			}
+			w.Write([]byte(`{"web":{"results":[{"title":"B","url":"https://b.com","description":"a <strong>hit</strong> here"}]}}`))
+		},
+		"bad.test": func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "subscription token invalid", http.StatusUnprocessableEntity)
+		},
+	})
 
 	// Point the provider at the stub by overriding the endpoint through a
 	// request-level rewrite: simplest is to parse the body path directly.
-	req, _ := http.NewRequest(http.MethodGet, brave.URL, nil)
+	req, _ := http.NewRequest(http.MethodGet, "http://brave.test", nil)
 	req.Header.Set("X-Subscription-Token", "kk")
 	body, err := searchDo(req)
 	if err != nil {
@@ -139,11 +171,7 @@ func TestTools_BraveAndGoogleParse(t *testing.T) {
 
 	// Upstream error bodies must survive into the chain's message — "brave 422"
 	// alone hides "subscription token invalid".
-	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "subscription token invalid", http.StatusUnprocessableEntity)
-	}))
-	defer bad.Close()
-	req2, _ := http.NewRequest(http.MethodGet, bad.URL, nil)
+	req2, _ := http.NewRequest(http.MethodGet, "http://bad.test", nil)
 	if _, err := searchDo(req2); err == nil || !strings.Contains(err.Error(), "subscription token invalid") {
 		t.Fatalf("want upstream detail, got %v", err)
 	}
