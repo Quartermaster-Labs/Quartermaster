@@ -845,7 +845,13 @@ func (s *Server) routes() {
 		mux.Handle("POST "+path, modelChain.Then(h))
 	}
 	for _, path := range modelPostFormRoutes {
-		mux.Handle("POST "+path, modelChain.Then(dispatch))
+		var h http.Handler = dispatch
+		if path == "/v1/audio/transcriptions" {
+			// Word timestamps for audio.cpp ASR (via its /details route) and 16 kHz
+			// mono input for parakeet-server. See transcribe.go.
+			h = s.handleTranscription(dispatch)
+		}
+		mux.Handle("POST "+path, modelChain.Then(h))
 	}
 	for _, path := range modelPostRawRoutes {
 		mux.Handle("POST "+path, modelChain.Then(dispatch))
