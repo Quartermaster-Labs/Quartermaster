@@ -95,9 +95,10 @@ func asrCmdLines(s Settings, row GgufRow, ov *Override) []string {
 // capabilities in:[audio] out:[text] block is what makes /v1/models report
 // audio_transcriptions=true, so the playground's Transcription tab lists the model.
 //
-// checkEndpoint is "none": parakeet-server documents no health route, and probing
-// an unknown path would 404 forever and never mark the model ready. Readiness
-// falls back to the listen socket opening.
+// checkEndpoint is /health: parakeet-server answers it with {"status":"ok"}.
+// It was "none", which marks a model ready the instant it spawns, so the first
+// request after a cold start reached a port nothing listened on yet and came
+// back a 502 with an empty body (the tts-server v7 bug again).
 func emitASRModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, arch string, emitted *[]string) {
 	fmt.Fprintf(b, "\n  # arch=%s size=%gGB (Parakeet ASR, parakeet.cpp parakeet-server)\n", arch, row.SizeGB)
 	fmt.Fprintf(b, "  %q:\n", name)
@@ -114,8 +115,7 @@ func emitASRModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, nam
 	// emitModel also files ASR models under coexistSets.ASR so the emitted "asr"
 	// group is persistent and non-exclusive, otherwise group membership alone
 	// would evict on every dictation regardless of the missing estimate.
-	// parakeet-server exposes no health route; readiness = socket open.
-	b.WriteString("    checkEndpoint: none\n")
+	b.WriteString("    checkEndpoint: /health\n")
 	if ov != nil && ov.Unlisted {
 		b.WriteString("    unlisted: true\n")
 	}

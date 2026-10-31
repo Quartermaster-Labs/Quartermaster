@@ -90,7 +90,7 @@ func TestEmitASRModel(t *testing.T) {
 		"--model C:/models/asr/parakeet-tdt-0.6b-v3-q8_0.gguf",
 		"--port ${PORT}",
 		"ttl: 600",
-		"checkEndpoint: none",
+		"checkEndpoint: /health",
 		"in: [audio]",
 		"out: [text]",
 	} {

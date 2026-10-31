@@ -342,7 +342,8 @@ const hashCacheSuffix = ".modelhash"
 // audio.cpp build is not Vulkan (HIP/CUDA decode it; Vulkan cannot).
 // v113: qwen3_asr takes the Qwen3 ForcedAligner (and an absolute VAD path)
 // as session options when one is on disk, for word timestamps.
-const genVersion = "v113"
+// v114: parakeet-server is health-checked on /health instead of "none".
+const genVersion = "v114"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

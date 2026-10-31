@@ -291,8 +291,10 @@ parakeet.cpp `parakeet-server`. `IsASRModel` = Parakeet/FastConformer/NeMo archs
 filename fallback — deliberately narrow on `nemotron`, which also names NVIDIA *text* LLMs.
 `asrCmdLines`/`emitASRModel`. No KV/offload sizing (encoder-decoder transducer, no growing KV;
 20–36× realtime on CPU, so GPU is opt-in via `ExtraArgs`). `asrExe` honors the model's backend
-pin: only an auto model follows the class default the ★ sets. `checkEndpoint: none` —
-parakeet-server documents no health route, so readiness = listen socket open.
+pin: only an auto model follows the class default the ★ sets. `checkEndpoint: /health`
+(parakeet-server v0.4.0 answers `{"status":"ok"}`). It used to be `none`, which marks the model
+ready at spawn, so the first request after a cold start hit a closed port and came back an empty
+502 (genVersion v114).
 `capabilities in:[audio] out:[text]`.
 
 Placed in the persistent `asr` coexistence group (`coexistSets.ASR`) for the same reason it emits
