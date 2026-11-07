@@ -152,7 +152,7 @@ and the encoder-shaped names are excluded.
 per machine, which broke on every models-tree move and made a newly downloaded diffusion model
 a config chore. `ScanEncoderPool` now classifies every component on disk from its header, and
 `fillEncoderSet` fills only the roles the user left blank (**a declared path always wins**, so
-existing configs are untouched).
+existing configs are untouched), after clearing any declared path whose file no longer exists.
 
 Everything it keys on is structural, because filenames are not: three unrelated files on the
 dev box are all named `ae.safetensors`, and two of those are byte-identical copies.
@@ -184,11 +184,31 @@ reads `transformer.caption_channels` (3840) out of it via `captionChannelsFrom`,
 `scan.condHidden` is 0. A tensor shape is what the model actually runs with, so the config blob
 never overrules it.
 
+The caption width may be a MULTIPLE of the encoder's (`captionLayouts` {1, 3, 8}): FLUX.2 Klein
+stacks 3 hidden layers of its Qwen3 encoder, FLUX.3 Klein 8 (20480 = 8 x 2560, Qwen3-VL-4B). Both
+lines are unified generate-and-edit checkpoints, so `fluxRefEditRe` (name-matched: they report arch
+`flux`) declares `in: [text, image]`; unlike Qwen-Image 2.1 they read references through the VAE,
+not a vision tower, so they get no `--llm_vision`. MOSS
+(`moss_image`, 4096) is the one family conditioned on a RECURRENT LLM (Qwen3.5-9B, GatedDeltaNet),
+which the ordinary `llm` role withholds on purpose, so it resolves through its own
+`RoleRecurrentLlm` plus a separate `RoleTokenizer` (MOSS's sd.cpp path reads the tokenizer from a
+file, not from the gguf). The FLUX.2 "small decoder" MOSS ships as its own `vae/` (same 32-ch
+latent, `decoder.conv_in` out 384 not 512) is excluded from the VAE pool: sd.cpp builds the FLUX.2
+autoencoder at a fixed width and cannot load it, so MOSS's companion recipe is the full flux2 ae.
+
 Width is **not** an identity on its own (five unrelated 2560-wide models are installed here), so
 ties break on `encoderArchRank` first: Qwen > Mistral > Gemma/Llama > unknown. That table is
 shipped knowledge about what DiTs are trained against, not per-machine tuning. Drafter sidecars
 (`mtp-*`, dflash) and pooled embedders are excluded outright: their widths collide with real
 encoders and neither can condition anything.
+
+**Where width is not enough, the ARCHITECTURE is pinned per family** (`imageEncoderArch` ->
+`EncoderPool.LlmArch`, matched on the gguf's `general.architecture`, recorded as `Family`): FLUX.3
+-> `qwen3vl`, FLUX.2 klein and Z-Image -> `qwen3`. Qwen3-4B / Qwen3-VL-4B (2560) and Qwen3-8B /
+Qwen3-VL-8B (4096) are each one width, and on the dev box the global pin handed FLUX.3 the text-only
+4B while file size handed klein 9B the VL 8B, silently. The restriction gates the pin too; a
+family-less (safetensors) encoder is not excluded, and with only the impostor on disk the `llm` role
+is reported missing, which is what makes the model browser offer the right file.
 
 A declared `settings.encoders.qwenLlm` of the matching width wins outright (`EncoderPool.Llm`
 takes it as `prefer`), and a per-model `textEncoderPath` wins over even that: the scan narrows the

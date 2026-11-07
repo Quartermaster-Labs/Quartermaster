@@ -22,6 +22,7 @@ var imageArchs = map[string]bool{
 	"sdxl":             true,
 	"stable-diffusion": true,
 	"qwen_image":       true,
+	"moss_image":       true,
 	"z_image":          true,
 	"lumina":           true, // Lumina2 / Lumina-Next; Z-Image-Turbo reports "lumina2"
 	"wan":              true,
@@ -272,7 +273,45 @@ func loraCategory(isVideo bool) string {
 // imageComponents are the resolved VAE / text-encoder file paths for one
 // diffusion model. Empty = not attached (the family doesn't need it, or it's
 // missing from the pool — see resolveComponents' missing list).
-type imageComponents struct{ vae, clipL, clipG, t5, llm, llmVision, audioVae string }
+type imageComponents struct{ vae, clipL, clipG, t5, llm, llmVision, audioVae, tokenizer string }
+
+// roles lists the components that resolved to a file, under the role names the
+// missing list uses (plus "llm_vision" for an auto-paired projector), so a
+// caller can show both halves of the answer side by side.
+func (c imageComponents) roles() []CompanionHave {
+	out := []CompanionHave{}
+	for _, r := range []CompanionHave{
+		{"vae", c.vae}, {"clip_l", c.clipL}, {"clip_g", c.clipG}, {"t5xxl", c.t5},
+		{"llm", c.llm}, {"llm_vision", c.llmVision}, {"tokenizer", c.tokenizer}, {"audio_vae", c.audioVae},
+	} {
+		if r.Path != "" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// imageEncoderArch names the text-encoder ARCHITECTURE a DiT family was
+// trained against, where width alone admits a wrong one (see
+// EncoderPool.LlmArch). "" = no restriction, the width match decides.
+//
+// Shipped knowledge, from each publisher's model card, and only for families
+// where a same-width impostor is a real, common install: Qwen3-4B and
+// Qwen3-VL-4B (2560), Qwen3-8B and Qwen3-VL-8B (4096). Name-matched for the
+// same reason resolveComponents' arms are: FLUX.2/3 report arch "flux" and
+// Z-Image "lumina2", shared with families that want something else (Lumina
+// proper conditions on Gemma-2, so "lumina" is NOT keyed here).
+func imageEncoderArch(arch, name string) string {
+	switch {
+	case strings.Contains(name, "flux-3") || strings.Contains(name, "flux3"):
+		return "qwen3vl" // FLUX.3 klein: Qwen3-VL-4B-Instruct
+	case strings.Contains(name, "klein"):
+		return "qwen3" // FLUX.2 klein: Qwen3-4B (4B) / Qwen3-8B (9B)
+	case arch == "z_image" || strings.Contains(name, "z-image") || strings.Contains(name, "z_image"):
+		return "qwen3" // Z-Image: Qwen3-4B
+	}
+	return ""
+}
 
 // resolveComponents decides which component files a bare diffusion GGUF needs
 // from its architecture, draws them from the shared Settings.Encoders pool, then
@@ -297,7 +336,8 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 	enc = fillEncoderSet(enc, pool)
 	// The text encoder is picked by MATCHING WIDTHS, not by name: the DiT states
 	// the encoder hidden size it was trained against, and each candidate reports
-	// its own. A declared EncoderSet.QwenLlm of that width wins outright, because
+	// its own. A declared EncoderSet.QwenLlm of that width (and, for the families
+	// imageEncoderArch keys, of that gguf architecture) wins outright, because
 	// width is not an identity: Qwen3-4B-Instruct-2507 and Qwen3-VL-4B-Instruct
 	// are both 2560 wide, and only the declaration says which one a given DiT was
 	// trained against. Without one the scan's pick is used, since a single global
@@ -324,12 +364,13 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 			preferLlm = h
 		}
 	}
-	autoLlm, autoVision := pool.Llm(condHidden, wantVision, preferLlm)
+	encArch := imageEncoderArch(a, n)
+	autoLlm, autoVision := pool.LlmArch(condHidden, wantVision, preferLlm, encArch)
 	if autoLlm == "" && wantVision {
 		// No vision-capable encoder of that width: fall back to a text-only one
 		// rather than emitting nothing, and let the missing projector show up as
 		// the model producing unconditioned output rather than as a dead server.
-		autoLlm, autoVision = pool.Llm(condHidden, false, preferLlm)
+		autoLlm, autoVision = pool.LlmArch(condHidden, false, preferLlm, encArch)
 	}
 	llmDefault := autoLlm
 	if llmDefault == "" && !pool.knowsLlm(enc.QwenLlm) {
@@ -375,7 +416,10 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 	// All three fall out of the width match, because flux.2 states a caption width
 	// of 3x its encoder hidden size (klein 9B: txt_in 12288 = 3 x 4096) and
 	// captionFactor divides that out. Nothing needs adding here for a new variant.
-	case strings.Contains(n, "klein") || strings.Contains(n, "flux2") || strings.Contains(n, "flux-2"):
+	//
+	// FLUX.3 klein is the same shape: same 32-ch VAE (its ae is byte-identical
+	// to FLUX.2's), an LLM encoder, txt_in 20480 = 8 x 2560 (Qwen3-VL-4B).
+	case strings.Contains(n, "klein") || strings.Contains(n, "flux2") || strings.Contains(n, "flux-2") || strings.Contains(n, "flux3") || strings.Contains(n, "flux-3"):
 		c.vae = req("vae", enc.Flux2Vae)
 		c.llm = req("llm", llmDefault)
 	// LongCat-Image / LongCat-Image-Edit ship their DiT in BFL (flux) tensor
@@ -393,6 +437,15 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 	case strings.Contains(n, "longcat"):
 		c.vae = req("vae", enc.FluxVae)
 		c.llm = req("llm", llmDefault)
+	// MOSS-Image (arch moss_image) conditions on Qwen3.5-9B, a RECURRENT hybrid
+	// (GatedDeltaNet). sd.cpp gives it its own conditioner, so it is the one
+	// consumer of RoleRecurrentLlm; llmDefault never holds a recurrent file. It
+	// also tokenizes outside the gguf: sd-server's moss-image spec makes a
+	// Qwen3.5 tokenizer.json a required slot. VAE: the standard FLUX.2 ae.
+	case a == "moss_image" || strings.Contains(n, "moss-image") || strings.Contains(n, "moss_image"):
+		c.vae = req("vae", firstNonEmpty(enc.Flux2Vae, pool.Vae(VaeFamilyFlux2)))
+		c.llm = req("llm", pool.RecurrentLlm(condHidden, "qwen3.5-9b", "qwen3_5-9b", "qwen3.5"))
+		c.tokenizer = req("tokenizer", pool.Tokenizer("moss-image", "qwen3.5", "qwen3_5"))
 	case a == "flux" || strings.HasPrefix(a, "flux"):
 		c.vae = req("vae", enc.FluxVae)
 		c.clipL = req("clip_l", enc.ClipL)
@@ -567,6 +620,9 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	if p := imageArg(comp.llm); p != "" {
 		lines = append(lines, "--llm "+p)
 	}
+	if p := imageArg(comp.tokenizer); p != "" {
+		lines = append(lines, "--tokenizer "+p)
+	}
 	// The soundtrack decoder of an audio-capable video model. Without it the DiT
 	// still denoises an audio latent it then has no way to turn into samples.
 	if p := imageArg(comp.audioVae); p != "" {
@@ -730,6 +786,9 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	}
 	if def.sampler != "" {
 		lines = append(lines, "--sampling-method "+def.sampler)
+	}
+	if def.flowShift > 0 {
+		lines = append(lines, fmt.Sprintf("--flow-shift %g", def.flowShift))
 	}
 	if def.width > 0 {
 		lines = append(lines, fmt.Sprintf("--width %d", def.width))
@@ -1230,8 +1289,27 @@ func wan3dLatent(arch string, condHidden int64) int64 {
 // (isDistilledName): the turbo is a fine-tune with the base's exact tensor
 // table, so nothing in the file separates them. Override.DefaultSteps/
 // DefaultCfg still win.
+//
+// Two more families need pins for the same reason:
+//
+//   - MOSS-Image (arch moss_image): the publisher's reference call is 50 steps
+//     at guidance 3.0, and sd-server's own moss-image spec adds flow_shift 5.
+//     Both built-ins are wrong (cfg 7 scorches it). Its reference call also
+//     passes uncond_skip_layers=[22], sd.cpp's --skip-layers/--slg-scale; not
+//     wired, since the scale has no published value.
+//   - FLUX.3 klein: guidance-distilled, so cfg 1, and the publisher measures
+//     its quants at 16 steps. Name-matched like its klein arm in
+//     resolveComponents: it reports arch "flux".
 func imageDefaultsFor(arch, name string, condHidden int64) genDefaults {
-	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(arch)), "qwen_image") {
+	a := strings.ToLower(strings.TrimSpace(arch))
+	n := strings.ToLower(name)
+	switch {
+	case a == "moss_image" || strings.Contains(n, "moss-image") || strings.Contains(n, "moss_image"):
+		return genDefaults{steps: 50, cfg: 3.0, flowShift: 5}
+	case strings.Contains(n, "flux-3") || strings.Contains(n, "flux3"):
+		return genDefaults{steps: 16, cfg: 1.0}
+	}
+	if !strings.HasPrefix(a, "qwen_image") {
 		return genDefaults{}
 	}
 	switch {

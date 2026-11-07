@@ -25,6 +25,7 @@ func TestIsVideoModel(t *testing.T) {
 func TestEmitVideoModel_MinimaxH3(t *testing.T) {
 	var b strings.Builder
 	var emitted []string
+	onDisk(t, "h3_video_vae.safetensors", "h3_audio_vae.safetensors", "qwen3vl32b.gguf")
 	enc := EncoderSet{VideoVae: "h3_video_vae.safetensors", AudioVae: "h3_audio_vae.safetensors", QwenLlm: "qwen3vl32b.gguf"}
 	s := Settings{SdServerExe: "sd-server", TtlSec: 600, TargetVramGB: 24, VramOverheadGB: 1, Threads: 7, Encoders: enc}
 	row := GgufRow{FullPath: `D:\models\minimax_h3-Q4_K_M.gguf`, SizeGB: 8.0}
@@ -100,6 +101,7 @@ func TestEmitVideoModel_MissingComponents(t *testing.T) {
 
 // An audio-less video family wires no --audio-vae and declares no audio out.
 func TestEmitVideoModel_WanNoAudio(t *testing.T) {
+	onDisk(t, "umt5.gguf")
 	var b strings.Builder
 	var emitted []string
 	s := Settings{SdServerExe: "sd-server", TtlSec: 600, TargetVramGB: 24, VramOverheadGB: 1, Threads: 7,

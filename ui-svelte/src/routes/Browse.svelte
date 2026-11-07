@@ -13,6 +13,7 @@
     searchHub,
     getHubModel,
     startHubDownload,
+    getHubCompanions,
     groupFiles,
     verdictFor,
     estimateHubFiles,
@@ -30,7 +31,10 @@
     type FileOption,
     type FitVerdict,
     type HubEstimate,
+    type HubCompanion,
+    type HubCompanions,
   } from "../lib/hubApi";
+  import Toggle from "../components/Toggle.svelte";
   import FolderBrowserModal from "../components/FolderBrowserModal.svelte";
   import LogSlider from "../components/LogSlider.svelte";
   import {
@@ -70,6 +74,14 @@
   // Real header-derived sizings for the open repo, keyed by file group. Empty
   // until they land; a row falls back to the size-only verdict meanwhile.
   let estimates = $state<Record<string, HubEstimate>>({});
+  // What an image DiT in the open repo needs beside itself (VAE, text encoder,
+  // tokenizer), per the server's own resolveComponents run against what is on
+  // disk. null = not an image repo, or not asked yet.
+  let companions = $state<HubCompanions | null>(null);
+  // The opt-out. On by default: a DiT without its encoder is a model that loads
+  // and then fails every render, which nobody wants by accident. Sticky across
+  // repos, like showAllFiles, because it is a way of working.
+  let withCompanions = $state(true);
 
   // Two kinds of filter in one menu, and the difference matters. `maxParamsB`
   // and `trendy` are HUB-side (the search is re-run; see searchFilters/capParams
@@ -173,6 +185,21 @@
   // A repo with a queue: the button still works, it just says where the pick
   // lands. Counted per repo, not globally — different repos run in parallel.
   const busyRepo = $derived($hubJobs.some((j) => isRunningJob(j) && j.repo === selected?.id));
+
+  // The server's states, overlaid with what the job list has learned since:
+  // a companion queued a moment ago is "downloading", and one whose job has
+  // finished is "local", without re-asking the server on every poll.
+  const companionRows = $derived<HubCompanion[]>(
+    (companions?.companions ?? []).map((c) => {
+      if (c.state === "local" || c.state === "unavailable") return c;
+      const jobs = $hubJobs.filter((j) => j.repo === c.repo && j.files.some((f) => f.path === c.path));
+      if (jobs.some((j) => j.phase === "done")) return { ...c, state: "local" };
+      if (jobs.some((j) => isRunningJob(j) || j.phase === "paused")) return { ...c, state: "downloading" };
+      return c;
+    })
+  );
+  const companionsNeeded = $derived(companionRows.filter((c) => c.state === "needed"));
+  const companionsNeededBytes = $derived(companionsNeeded.reduce((n, c) => n + (c.sizeBytes || 0), 0));
 
   // A finished pull changes what is on disk, and the "downloaded" badge is read
   // off disk — so the open repo has to be re-read once its job lands, or the row
@@ -584,10 +611,12 @@
     loadingModel = true;
     err = null;
     estimates = {};
+    companions = null;
     selectedAudio = null;
     try {
       selected = await getHubModel(m.id, m.source);
       void sizeRepo(selected);
+      void loadCompanions(selected);
     } catch (e) {
       err = e instanceof Error ? e.message : String(e);
       selected = null;
@@ -638,6 +667,40 @@
     }
   }
 
+  // Ask what else an image model needs. One file is enough: every quant in a
+  // repo is the same architecture, and the server reads only its header. Text
+  // repos are skipped for the same reason sizeRepo skips image ones; anything
+  // else (including "All" on an image repo) is the server's call, which answers
+  // image=false for an LLM.
+  async function loadCompanions(det: HubDetail): Promise<void> {
+    if (kind === "llm" || isTextRepo(det)) return;
+    const first = groupFiles(det.files).find(
+      (o) => !o.projector && !o.aux && o.files[0]?.path?.toLowerCase().endsWith(".gguf")
+    );
+    if (!first) return;
+    try {
+      const c = await getHubCompanions(det.id, first.files[0].path, det.source);
+      if (selected?.id !== det.id) return;
+      companions = c.image ? c : null;
+    } catch {
+      // Best-effort: without it the picker is exactly what it was before.
+    }
+  }
+
+  const ROLE_NAMES: Record<string, string> = {
+    vae: "VAE",
+    llm: "text encoder",
+    tokenizer: "tokenizer",
+    llm_vision: "vision projector",
+    audio_vae: "audio VAE",
+    clip_l: "CLIP-L encoder",
+    clip_g: "CLIP-G encoder",
+    t5xxl: "T5-XXL encoder",
+  };
+  function roleName(role: string): string {
+    return ROLE_NAMES[role] ?? role;
+  }
+
   // Which repos the LLM sizer is allowed to be pointed at when the category tab
   // no longer implies one. image-text-to-text is here because a VLM is an LLM
   // with a projector, and its weights are planned exactly like any other.
@@ -660,6 +723,22 @@
         selected.source,
         force
       );
+      // Companions ride along with the model itself, never with a projector or
+      // an extra file, and never on a forced re-download (that is about THIS
+      // file being wrong, not about what is missing beside it). One job per
+      // companion repo: the manager runs repos in parallel and queues within one.
+      if (withCompanions && !force && !opt.projector && !opt.aux && companionsNeeded.length) {
+        const byRepo = new Map<string, HubCompanion[]>();
+        for (const c of companionsNeeded) byRepo.set(c.repo, [...(byRepo.get(c.repo) ?? []), c]);
+        for (const [repo, cs] of byRepo) {
+          await startHubDownload(
+            repo,
+            cs.map((c) => c.path),
+            `${cs.map((c) => c.label).join(", ")} (for ${opt.label})`,
+            cs[0].source
+          );
+        }
+      }
       await refreshHubJobs();
     } catch (e) {
       err = e instanceof Error ? e.message : String(e);
@@ -1102,6 +1181,64 @@
                 {/if}
               </div>
             {:else}
+              <!-- Companion files: what this image model needs beside the DiT.
+                   Shown with sizes and an opt-out rather than pulled silently,
+                   because a 9 GB encoder behind a 5 GB pick is a surprise
+                   otherwise. Parts the disk already satisfies are listed too,
+                   by the file the next regen will wire: without them "needs
+                   nothing" and "not understood" both showed no box at all, and
+                   which same-width encoder got picked was invisible. -->
+              {#if companions && (companionRows.length || companions.unsourced.length || companions.have?.length)}
+                {@const needsMore = companionRows.length > 0 || companions.unsourced.length > 0}
+                <div class="mb-3 rounded border border-card-border bg-secondary/20 p-2.5 text-xs">
+                  <div class="mb-1.5 font-medium text-txtmain">
+                    {needsMore ? "This model also needs" : "Everything else this model needs is already downloaded"}
+                  </div>
+                  <ul class="space-y-1">
+                    {#each companionRows as c (c.role)}
+                      <li class="flex items-baseline gap-2">
+                        <span class="text-txtmain">{c.label}</span>
+                        <span class="text-micro uppercase tracking-wide text-txtsecondary">{roleName(c.role)}</span>
+                        <span class="ml-auto tabular-nums whitespace-nowrap">
+                          {#if c.state === "local"}
+                            <span class="inline-flex items-center gap-0.5 text-success"><Check class="w-3 h-3" /> downloaded</span>
+                          {:else if c.state === "downloading"}
+                            <span class="text-txtsecondary">downloading</span>
+                          {:else if c.state === "unavailable"}
+                            <span class="text-error" use:tip={`${c.repo} no longer lists ${c.path}`}>unavailable</span>
+                          {:else}
+                            <span class="text-txtsecondary">{humanBytes(c.sizeBytes)}</span>
+                          {/if}
+                        </span>
+                      </li>
+                    {/each}
+                    {#each companions.have ?? [] as h (h.role)}
+                      <li class="flex items-baseline gap-2">
+                        <span class="min-w-0 truncate text-txtmain" use:tip={h.path}>{h.path.split(/[\\/]/).pop()}</span>
+                        <span class="text-micro uppercase tracking-wide text-txtsecondary">{roleName(h.role)}</span>
+                        <span class="ml-auto whitespace-nowrap">
+                          <span class="inline-flex items-center gap-0.5 text-success"><Check class="w-3 h-3" /> on disk</span>
+                        </span>
+                      </li>
+                    {/each}
+                    {#each companions.unsourced as role (role)}
+                      <li class="flex items-baseline gap-2 text-amber-500">
+                        <AlertTriangle class="w-3 h-3 self-center" />
+                        <span>A {roleName(role)} quartermaster has no download source for. Add one to your models folder by hand.</span>
+                      </li>
+                    {/each}
+                  </ul>
+                  {#if companionsNeeded.length}
+                    <label class="mt-2 flex items-center gap-2 text-txtsecondary">
+                      <Toggle bind:checked={withCompanions} size="sm" />
+                      <span>
+                        Download {companionsNeeded.length === 1 ? "it" : "them"} with the model
+                        ({humanBytes(companionsNeededBytes)} more)
+                      </span>
+                    </label>
+                  {/if}
+                </div>
+              {/if}
               <!-- data-table: the grid-free variant (index.css). This table had
                    the full cell grid AND zebra banding AND per-row borders -
                    three separators doing one job. Header type matches the rest

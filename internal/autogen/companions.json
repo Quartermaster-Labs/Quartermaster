@@ -1,0 +1,103 @@
+{
+  "_doc": "Known-good download sources for the component files a split diffusion model needs, keyed by family. Read by companions.go. Only the parts resolveComponents reports MISSING are offered, so an encoder already on disk is never re-pulled. Order matters: the first family whose arch/name/condHidden all match wins, so specific entries go above general ones (mirror the arm order in resolveComponents). Every source here is ungated; check one with E:/Scratch/quartermaster/companions/check_hf.py-style HF API reads before adding it. A file that has moved upstream shows up in the model browser as 'unavailable', not as a failed download.",
+  "families": [
+    {
+      "id": "moss-image",
+      "arch": ["moss_image"],
+      "name": ["moss-image", "moss_image"],
+      "parts": {
+        "vae": { "repo": "Comfy-Org/flux2-dev", "path": "split_files/vae/flux2-vae.safetensors", "label": "FLUX.2 VAE" },
+        "llm": { "repo": "unsloth/Qwen3.5-9B-GGUF", "path": "Qwen3.5-9B-Q8_0.gguf", "label": "Qwen3.5-9B text encoder" },
+        "tokenizer": { "repo": "unsloth/MOSS-Image-SFT-FP8", "path": "tokenizer/tokenizer.json", "label": "Qwen3.5 tokenizer" }
+      }
+    },
+    {
+      "id": "flux3-klein",
+      "name": ["flux-3", "flux3"],
+      "condHidden": 20480,
+      "parts": {
+        "vae": { "repo": "Comfy-Org/flux2-dev", "path": "split_files/vae/flux2-vae.safetensors", "label": "FLUX.2 VAE (FLUX.3 uses the same one)" },
+        "llm": { "repo": "unsloth/Qwen3-VL-4B-Instruct-GGUF", "path": "Qwen3-VL-4B-Instruct-Q8_0.gguf", "label": "Qwen3-VL-4B text encoder" }
+      }
+    },
+    {
+      "id": "flux2-klein-4b",
+      "name": ["klein", "flux2", "flux-2"],
+      "condHidden": 7680,
+      "parts": {
+        "vae": { "repo": "Comfy-Org/flux2-dev", "path": "split_files/vae/flux2-vae.safetensors", "label": "FLUX.2 VAE" },
+        "llm": { "repo": "unsloth/Qwen3-4B-GGUF", "path": "Qwen3-4B-Q8_0.gguf", "label": "Qwen3-4B text encoder" }
+      }
+    },
+    {
+      "id": "flux2-klein-9b",
+      "name": ["klein", "flux2", "flux-2"],
+      "condHidden": 12288,
+      "parts": {
+        "vae": { "repo": "Comfy-Org/flux2-dev", "path": "split_files/vae/flux2-vae.safetensors", "label": "FLUX.2 VAE" },
+        "llm": { "repo": "unsloth/Qwen3-8B-GGUF", "path": "Qwen3-8B-Q8_0.gguf", "label": "Qwen3-8B text encoder" }
+      }
+    },
+    {
+      "id": "flux2-dev",
+      "name": ["flux2", "flux-2"],
+      "condHidden": 15360,
+      "parts": {
+        "vae": { "repo": "Comfy-Org/flux2-dev", "path": "split_files/vae/flux2-vae.safetensors", "label": "FLUX.2 VAE" },
+        "llm": { "repo": "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF", "path": "Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf", "label": "Mistral-Small-3.2-24B text encoder" }
+      }
+    },
+    {
+      "id": "chroma",
+      "name": ["chroma"],
+      "parts": {
+        "vae": { "repo": "Comfy-Org/Lumina_Image_2.0_Repackaged", "path": "split_files/vae/ae.safetensors", "label": "FLUX.1 VAE" },
+        "t5xxl": { "repo": "city96/t5-v1_1-xxl-encoder-gguf", "path": "t5-v1_1-xxl-encoder-Q8_0.gguf", "label": "T5-XXL text encoder" }
+      }
+    },
+    {
+      "id": "longcat-image",
+      "name": ["longcat"],
+      "parts": {
+        "vae": { "repo": "Comfy-Org/Lumina_Image_2.0_Repackaged", "path": "split_files/vae/ae.safetensors", "label": "FLUX.1 VAE" },
+        "llm": { "repo": "unsloth/Qwen2.5-VL-7B-Instruct-GGUF", "path": "Qwen2.5-VL-7B-Instruct-Q8_0.gguf", "label": "Qwen2.5-VL-7B text encoder" }
+      }
+    },
+    {
+      "id": "flux1",
+      "arch": ["flux"],
+      "parts": {
+        "vae": { "repo": "Comfy-Org/Lumina_Image_2.0_Repackaged", "path": "split_files/vae/ae.safetensors", "label": "FLUX.1 VAE" },
+        "clip_l": { "repo": "comfyanonymous/flux_text_encoders", "path": "clip_l.safetensors", "label": "CLIP-L text encoder" },
+        "t5xxl": { "repo": "city96/t5-v1_1-xxl-encoder-gguf", "path": "t5-v1_1-xxl-encoder-Q8_0.gguf", "label": "T5-XXL text encoder" }
+      }
+    },
+    {
+      "id": "z-image",
+      "arch": ["lumina", "z_image"],
+      "name": ["z-image"],
+      "parts": {
+        "vae": { "repo": "Comfy-Org/Lumina_Image_2.0_Repackaged", "path": "split_files/vae/ae.safetensors", "label": "FLUX.1 VAE (Z-Image uses the same one)" },
+        "llm": { "repo": "unsloth/Qwen3-4B-GGUF", "path": "Qwen3-4B-Q8_0.gguf", "label": "Qwen3-4B text encoder" }
+      }
+    },
+    {
+      "id": "krea2",
+      "arch": ["qwen_image"],
+      "name": ["krea"],
+      "parts": {
+        "vae": { "repo": "Comfy-Org/Wan_2.1_ComfyUI_repackaged", "path": "split_files/vae/wan_2.1_vae.safetensors", "label": "Wan 2.1 VAE" },
+        "llm": { "repo": "unsloth/Qwen3-VL-4B-Instruct-GGUF", "path": "Qwen3-VL-4B-Instruct-Q8_0.gguf", "label": "Qwen3-VL-4B text encoder" }
+      }
+    },
+    {
+      "id": "qwen-image",
+      "arch": ["qwen_image"],
+      "condHidden": 3584,
+      "parts": {
+        "vae": { "repo": "Comfy-Org/Qwen-Image_ComfyUI", "path": "split_files/vae/qwen_image_vae.safetensors", "label": "Qwen-Image VAE" },
+        "llm": { "repo": "unsloth/Qwen2.5-VL-7B-Instruct-GGUF", "path": "Qwen2.5-VL-7B-Instruct-Q8_0.gguf", "label": "Qwen2.5-VL-7B text encoder" }
+      }
+    }
+  ]
+}

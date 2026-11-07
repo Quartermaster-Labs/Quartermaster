@@ -155,6 +155,9 @@ func fillerLabel(typeBytes map[uint32]int64) string {
 // no width at all: its GGUF carries three KV pairs and no diffusers config blob,
 // so captionChannelsFrom has nothing to fall back on and the model is emitted
 // with a "needs encoder [llm]" warning that no download can clear.
+//
+// MOSS-Image projects through text_embedder.proj (4096 = Qwen3.5-9B, a
+// recurrent hybrid; see EncoderPool.RecurrentLlm).
 var condTensorOrder = []string{
 	"txt_in.weight",
 	"txt_in.in_layer.weight",
@@ -163,6 +166,7 @@ var condTensorOrder = []string{
 	"condition_proj.weight",
 	"context_embedder.weight",
 	"txtfusion.layerwise_blocks.0.prenorm.scale",
+	"text_embedder.proj.weight",
 }
 
 var condTensors = func() map[string]struct{} {

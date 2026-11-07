@@ -244,6 +244,37 @@ fits is only useful at a window you can actually use.
   asking it about a diffusion or TTS gguf would produce a confidently wrong number.
 - The model's own config page remains the authority once the file is on disk.
 
+## Companion files for image models
+
+An image DiT is a third of a model: it also needs a VAE and a text encoder (MOSS also a
+tokenizer), usually from other repos, and nothing on the hub page says which. On opening a
+non-text repo, `loadCompanions` asks `GET /api/hub/companions` for the first loadable gguf (every
+quant of a repo is the same architecture) and, for an image model, draws a "This model also
+needs" box above the file table: each part's label, role and size, or "downloaded" /
+"downloading" / "unavailable".
+
+**Parts already on disk are listed too, by file** (`have`: the file name, the full path on hover,
+"on disk"), and when nothing is missing the heading becomes "Everything else this model needs is
+already downloaded". Before that, a DiT needing nothing showed no box at all, the same as an LLM
+repo, and a user could not tell "complete" from "not understood" (two reports in a row, both of
+which were correct behaviour). Naming the file also makes the encoder pick visible BEFORE the
+download: a wrong same-width encoder is otherwise invisible until a render comes out off-prompt.
+
+**Visible with an opt-out, never silent.** The toggle ("Download them with the model, N GB more")
+defaults ON, because a DiT without its encoder loads and then fails every render. But a 9.5 GB
+encoder behind a 5 GB pick must not be a surprise, which is why the sizes are stated before the
+click. It is sticky across repos, like "show all files".
+
+`download()` queues companions only alongside the model itself: never with a projector or extra
+row, and never on a forced re-download (that one is about the picked file being wrong). One job
+per companion repo, since the manager runs repos in parallel and queues within one.
+`companionRows` overlays the job store on the server's answer, so a part flips to
+"downloading" / "downloaded" without re-asking.
+
+The list is exactly what the next regen would warn about (the server runs autogen's own
+`resolveComponents` against the disk), so an encoder you already have is never offered. Roles no
+recipe covers are listed as "has no download source" rather than implying the model is complete.
+
 ## Downloads and errors
 
 Browse draws **no download progress of its own** — the status rail's Downloads menu is the single

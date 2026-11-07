@@ -3,6 +3,7 @@ package autogen
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -59,6 +60,19 @@ const (
 	RoleClip     ComponentRole = "clip"
 	RoleT5       ComponentRole = "t5"
 	RoleLlm      ComponentRole = "llm"
+	// RoleRecurrentLlm is an LLM with recurrent (GatedDeltaNet/SSM) layers. It
+	// is its own role, not RoleLlm with a flag, so that no width-matched pick
+	// (Llm, LlmHinted, fillEncoderSet) can ever reach one: most conditioners
+	// are a plain transformer stack and die loading it (see isRecurrentLlm).
+	// Only a family whose sd.cpp runner ships a recurrent conditioner asks for
+	// it by name, through RecurrentLlm (MOSS-Image on Qwen3.5-9B).
+	RoleRecurrentLlm ComponentRole = "recurrent-llm"
+	// RoleTokenizer is a standalone HF tokenizer.json, which sd.cpp takes as
+	// --tokenizer for a family whose conditioner will not use the vocab baked
+	// into the encoder gguf (MOSS-Image: "requires the official Qwen3.5
+	// tokenizer.json"). Recorded by FILENAME, never parsed: a 20 MB JSON per
+	// HF folder per scan is not worth the read, and the picker is hint-scoped.
+	RoleTokenizer ComponentRole = "tokenizer"
 	// roleProj is a vision projector: paired to an llm, never picked alone.
 	roleProj ComponentRole = "mmproj"
 )
@@ -171,6 +185,14 @@ func classifySafetensors(h map[string]stTensor, sizeGB float64, path string) Com
 		case 16:
 			c.Family = VaeFamilyFlux
 		case 32:
+			// The FLUX.2 "small decoder" (MOSS-Image ships it as its vae/) has
+			// the same 32-ch latent but a 96-wide decoder (conv_in out 384,
+			// not 512). sd.cpp builds the FLUX.2 autoencoder at a fixed
+			// width, so it fails to load; left in the family, the unhinted
+			// path sort would hand it to every FLUX.2 / ERNIE / MOSS model.
+			if dim("decoder.conv_in.weight", 0) != 512 {
+				return ComponentFile{}
+			}
 			c.Family = VaeFamilyFlux2
 		default:
 			return ComponentFile{}
@@ -277,6 +299,11 @@ func ScanEncoderPool(roots []string) *EncoderPool {
 				return nil
 			}
 			sizeGB := round(float64(fi.Size())/gib, 2)
+			if strings.EqualFold(d.Name(), "tokenizer.json") {
+				seen[key] = true
+				p.Files = append(p.Files, ComponentFile{Path: path, Role: RoleTokenizer, SizeGB: sizeGB})
+				return nil
+			}
 			switch strings.ToLower(filepath.Ext(path)) {
 			case ".safetensors":
 				h, e := readSafetensorsHeader(path)
@@ -331,12 +358,20 @@ func ScanEncoderPool(roots []string) *EncoderPool {
 					// A pooled embedder emits one vector for the whole prompt,
 					// not the per-token sequence a DiT cross-attends to.
 				case isRecurrentLlm(meta):
-					// sd.cpp's conditioner is a plain transformer stack, so a
-					// hybrid cannot load at all. Left in the pool it still
-					// wins its width class: MiMo-V2.6-Distill-Qwen-9B (a
-					// Qwen3.5 hybrid) is 4096 wide, arch qwen*, has an mmproj
-					// and outweighs Qwen3-VL-8B, so it took Qwen-Image 2.1
-					// and sd-server died on "model metadata validation failed".
+					// Most of sd.cpp's conditioners are a plain transformer
+					// stack, so a hybrid cannot load there at all. Left in the
+					// LLM pool it still wins its width class:
+					// MiMo-V2.6-Distill-Qwen-9B (a Qwen3.5 hybrid) is 4096
+					// wide, arch qwen*, has an mmproj and outweighs
+					// Qwen3-VL-8B, so it took Qwen-Image 2.1 and sd-server
+					// died on "model metadata validation failed". So it is
+					// recorded under its own role, which only a family with a
+					// recurrent conditioner (MOSS-Image) asks for.
+					seen[key] = true
+					p.Files = append(p.Files, ComponentFile{
+						Path: path, Role: RoleRecurrentLlm, Family: arch,
+						Width: meta.EmbeddingLength, SizeGB: sizeGB,
+					})
 				default:
 					seen[key] = true
 					p.Files = append(p.Files, ComponentFile{
@@ -489,6 +524,70 @@ func (p *EncoderPool) LlmHinted(hints ...string) string {
 	return ""
 }
 
+// RecurrentLlm returns the recurrent (hybrid) text encoder of exactly this
+// width, for the one kind of caller that can load one: a family whose sd.cpp
+// runner ships its own recurrent conditioner (MOSS-Image's Qwen35DeltaNet).
+// Exact width only, no caption concatenation: no recurrent-conditioned DiT
+// stacks layers, and width is the only structural gate this role has.
+//
+// hints are tried first, in order, against the path: a hybrid distill of the
+// same base (MiMo-V2.6-Distill-Qwen-9B against Qwen3.5-9B) has the same width
+// and arch, and size would hand the DiT the wrong one. Without a hint hit the
+// usual better() order decides.
+func (p *EncoderPool) RecurrentLlm(hidden int64, hints ...string) string {
+	if p == nil || hidden <= 0 {
+		return ""
+	}
+	var cands []ComponentFile
+	for _, f := range p.Files {
+		if f.Role == RoleRecurrentLlm && f.Width == hidden {
+			cands = append(cands, f)
+		}
+	}
+	for _, h := range hints {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" {
+			continue
+		}
+		for _, f := range cands {
+			if strings.Contains(strings.ToLower(filepath.ToSlash(f.Path)), h) {
+				return f.Path
+			}
+		}
+	}
+	var best ComponentFile
+	for _, f := range cands {
+		if best.Path == "" || better(f, best) {
+			best = f
+		}
+	}
+	return best.Path
+}
+
+// Tokenizer returns the standalone tokenizer.json whose path carries one of
+// the hints, tried in order. Hint-scoped with NO fallback, unlike the VAE and
+// LLM pickers: every HF model folder on the box ships a tokenizer.json, and a
+// wrong vocab is not a crash, it is an encoder reading a prompt as different
+// tokens. An empty answer surfaces as the "needs component [tokenizer]"
+// warning, which the model browser's companion download can clear.
+func (p *EncoderPool) Tokenizer(hints ...string) string {
+	if p == nil {
+		return ""
+	}
+	for _, h := range hints {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" {
+			continue
+		}
+		for _, f := range p.Files {
+			if f.Role == RoleTokenizer && strings.Contains(strings.ToLower(filepath.ToSlash(f.Path)), h) {
+				return f.Path
+			}
+		}
+	}
+	return ""
+}
+
 // Clip returns the discovered CLIP tower of a given width (768 = L, 1280 = G).
 func (p *EncoderPool) Clip(width int64) string {
 	if p == nil {
@@ -578,6 +677,25 @@ func better(f, best ComponentFile) bool {
 //
 // Ties break by encoderArchRank, then file size, then path (see better).
 func (p *EncoderPool) Llm(hidden int64, wantVision bool, prefer string) (path, mmproj string) {
+	return p.LlmArch(hidden, wantVision, prefer, "")
+}
+
+// LlmArch is Llm restricted to one encoder ARCHITECTURE (the gguf's
+// general.architecture, recorded as Family), for a DiT whose trained-against
+// encoder shares its width with a different model. "" means no restriction.
+//
+// Width cannot separate Qwen3-4B (`qwen3`) from Qwen3-VL-4B (`qwen3vl`): both
+// are 2560 wide, and FLUX.3 (8 x 2560) wants the VL one while Z-Image and
+// FLUX.2 klein want the plain one. Before this, the answer was whichever won
+// the tiebreak (the larger file) or the single global qwenLlm pin, so ONE of
+// the two families was always wired wrong on a box that had both, with no
+// warning: a mismatched encoder renders, just not the asked-for picture.
+//
+// The restriction applies to the pin too: a pin of the wrong architecture is
+// ignored and the scan decides, exactly as for a pin of the wrong width. A
+// file of UNKNOWN family (a safetensors encoder, which records no arch) is not
+// excluded: only a positively different architecture is.
+func (p *EncoderPool) LlmArch(hidden int64, wantVision bool, prefer, arch string) (path, mmproj string) {
 	if p == nil {
 		return "", ""
 	}
@@ -596,6 +714,9 @@ func (p *EncoderPool) Llm(hidden int64, wantVision bool, prefer string) (path, m
 			continue
 		}
 		if wantVision && !f.Vision {
+			continue
+		}
+		if arch != "" && f.Family != "" && !strings.EqualFold(f.Family, arch) {
 			continue
 		}
 		if pin != "" && config.PathKey(f.Path) == pin {
@@ -617,31 +738,38 @@ func (p *EncoderPool) Llm(hidden int64, wantVision bool, prefer string) (path, m
 	return best.Path, best.Mmproj
 }
 
-// maxCaptionConcat caps how many encoder hidden layers a DiT may be assumed to
-// concatenate. 3 is the only value seen in the wild (flux.2); the spare rung is
-// slack for the next one. Keeping the cap low is what stops the divisibility
-// test below from degrading into "any sufficiently narrow encoder will do".
-const maxCaptionConcat = 4
+// captionLayouts are the encoder-layer concatenations a DiT is known to use,
+// i.e. the k in txt_in = k x encoder width. 1 is every single-hidden-state DiT;
+// 3 is FLUX.2 (klein 9B: 12288 = 3 x 4096, Qwen3-8B); 8 is FLUX.3 klein
+// (20480 = 8 x 2560, Qwen3-VL-4B).
+//
+// A whitelist, not a cap, because the caller prefers the LOWEST factor and the
+// two disagree the moment a DiT concatenates more than a few layers. Under the
+// old "any k <= 4" rule FLUX.3's 20480 matched nothing (8 > 4); raising the cap
+// to 8 would have matched 4 x 5120 (a Qwen3-32B) and 5 x 4096 (any Qwen3-8B on
+// the box) ahead of the 8 x 2560 it was trained against, wiring the wrong
+// encoder with no warning. Only layouts that exist get to compete.
+var captionLayouts = []int64{1, 3, 8}
 
 // captionFactor reports how many encoder hidden states of the given width this
 // DiT's caption projection consumes, or 0 when that encoder cannot be the one.
 //
 // Nearly every DiT projects a SINGLE encoder hidden state, so txt_in is exactly
-// the encoder width and the answer is 1. FLUX.2 is the exception: it conditions
-// on several hidden LAYERS of its LLM concatenated, so klein 9B states txt_in
-// 12288 against a 4096-wide Qwen3-8B. Matched on equality that finds nothing,
-// and the caller's pin fallback then substitutes an encoder of the wrong width
-// with no warning at all.
+// the encoder width and the answer is 1. The FLUX.2/3 line is the exception: it
+// conditions on several hidden LAYERS of its LLM concatenated. Matched on
+// equality that finds nothing, and the caller's pin fallback then substitutes
+// an encoder of the wrong width with no warning at all.
 //
-// Testing divisibility instead keeps this structural rather than a per-model
-// table: a future DiT that concatenates a different number of layers resolves
-// here with no new case. Exactness is still preferred by the caller.
+// Exactness is still preferred by the caller.
 func captionFactor(hidden, width int64) int64 {
 	if hidden <= 0 || width <= 0 || hidden%width != 0 {
 		return 0
 	}
-	if k := hidden / width; k <= maxCaptionConcat {
-		return k
+	k := hidden / width
+	for _, l := range captionLayouts {
+		if k == l {
+			return k
+		}
 	}
 	return 0
 }
@@ -721,15 +849,41 @@ func encoderPoolFor(roots []string) *EncoderPool {
 	return p
 }
 
+// InvalidateEncoderPool drops every cached scan, for a caller that has just put
+// a component on disk and is about to regen. The TTL alone is not enough there:
+// the model browser queues a DiT and its companions together, a small VAE lands
+// seconds after the previous regen scanned, and a cached pool would wire the
+// model without it until the next unrelated regen.
+func InvalidateEncoderPool() {
+	poolCacheMu.Lock()
+	clear(poolCache)
+	poolCacheMu.Unlock()
+}
+
 // fillEncoderSet returns declared with every blank field filled from what the
 // scan actually found on disk. Declared paths always win: an explicit setting is
 // a deliberate statement about a machine, and silently second-guessing it would
 // make a working config drift.
 //
+// The one exception is a declared file that no longer EXISTS. It is cleared
+// first, so the pool fills the slot or the role is reported missing. Kept, it
+// read as satisfied: the regen emitted a flag at a path sd-server then failed to
+// open, with no warning, and the model browser never offered the file again
+// because nothing was "missing". Moving one encoder out of the models folder
+// was enough to hit it.
+//
 // The hints exist because a family can hold more than one file (see Vae).
 func fillEncoderSet(declared EncoderSet, p *EncoderPool) EncoderSet {
 	if p == nil {
 		return declared
+	}
+	for _, dst := range []*string{
+		&declared.FluxVae, &declared.ClipL, &declared.ClipG, &declared.T5, &declared.SdxlVae,
+		&declared.ZimageVae, &declared.QwenLlm, &declared.Flux2Vae, &declared.VideoVae, &declared.AudioVae,
+	} {
+		if declaredGone(*dst, p) {
+			*dst = ""
+		}
 	}
 	fill := func(dst *string, v string) {
 		if strings.TrimSpace(*dst) == "" {
@@ -756,6 +910,26 @@ func fillEncoderSet(declared EncoderSet, p *EncoderPool) EncoderSet {
 	fill(&declared.ClipG, p.Clip(1280))
 	fill(&declared.T5, p.T5())
 	return declared
+}
+
+// declaredGone reports a declared component path that is provably absent: the
+// scan did not find it AND the filesystem says it does not exist. A file the pool
+// lists is present by construction, and any stat error other than not-exist
+// (permissions, a slow share) keeps the declaration, since dropping a working
+// path on a transient error would rewire a model behind the user's back.
+func declaredGone(path string, p *EncoderPool) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	key := config.PathKey(path)
+	for _, f := range p.Files {
+		if config.PathKey(f.Path) == key {
+			return false
+		}
+	}
+	_, err := os.Stat(path)
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // projectorBeside returns the vision projector paired to a given text-encoder
@@ -805,6 +979,20 @@ var editModelRe = regexp.MustCompile(`(?i)(^|[-_. ])(edit|rapid|kontext|instruct
 // frame instead of editing against a reference.
 var unifiedEditRe = regexp.MustCompile(`(?i)(^|[-_. ])qwen[-_. ]?image[-_. ]?2\.1([-_. ]|$)`)
 
+// fluxRefEditRe matches the FLUX.2 / FLUX.3 line (dev and klein), which is
+// unified the same way: BFL ships one checkpoint for text-to-image, a single
+// reference edit and multi-reference composition (FLUX.3 klein's card: "up to
+// 10 reference images ... through the same model"). Every converter tags these
+// general.architecture "flux", the same as flux.1, so the name is again the
+// only signal; it is the same set resolveComponents' klein arm keys on.
+//
+// Kept OUT of unifiedEditRe on purpose, because that one also drives
+// wantsVisionEncoder. FLUX takes its references through the VAE, as latent
+// sequence tokens, not through the text encoder's vision tower: klein 4B/9B
+// condition on text-only Qwen3, so there is no projector to pair and a
+// --llm_vision would be a wasted load at best. Only the capability changes.
+var fluxRefEditRe = regexp.MustCompile(`(?i)(^|[-_. ])(flux[-_. ]?[23]|klein)([-_. ]|$)`)
+
 // wantsVisionEncoder reports whether this model should get --llm_vision. Only
 // llm-conditioned families are candidates: flux.1 edit models condition through
 // T5, which has no vision tower at all.
@@ -840,7 +1028,7 @@ func IsReferenceEditModel(name string, ov *Override) bool {
 			return false
 		}
 	}
-	return refEditRe.MatchString(name) || unifiedEditRe.MatchString(name)
+	return refEditRe.MatchString(name) || unifiedEditRe.MatchString(name) || fluxRefEditRe.MatchString(name)
 }
 
 func wantsVisionEncoder(arch, name string, ov *Override) bool {

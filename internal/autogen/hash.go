@@ -343,7 +343,18 @@ const hashCacheSuffix = ".modelhash"
 // v113: qwen3_asr takes the Qwen3 ForcedAligner (and an absolute VAD path)
 // as session options when one is on disk, for word timestamps.
 // v114: parakeet-server is health-checked on /health instead of "none".
-const genVersion = "v114"
+// v115: MOSS-Image (recurrent Qwen3.5 encoder + --tokenizer) and FLUX.3 klein
+// (8-layer caption concat) are wired; the FLUX.2 small decoder leaves the pool.
+// v116: FLUX.2 / FLUX.3 (dev and klein) declare in: [text, image]. One
+// checkpoint generates and edits, so no edit token in the name caught it, and
+// the playground fell through to img2img. Capability only: no --llm_vision.
+// v117: FLUX.3, FLUX.2 klein and Z-Image restrict their text encoder by gguf
+// ARCHITECTURE (imageEncoderArch), so a same-width Qwen3 / Qwen3-VL no longer
+// wins on a global pin or file size; FLUX.3 moves from Qwen3-4B to Qwen3-VL-4B.
+// v118: a declared settings.encoders path whose file is gone is cleared before the
+// pool fill (declaredGone), so the scan supplies the part or it is reported missing
+// instead of emitting a flag at a path sd-server cannot open.
+const genVersion = "v118"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

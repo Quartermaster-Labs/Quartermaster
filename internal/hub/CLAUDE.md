@@ -71,7 +71,7 @@ Two halves, deliberately separable: a **Source adapter** (what a hub knows) and 
 
 - **A stored, UI-editable token.** `hubToken` (`internal/server/hubapi.go`) reads `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN` / `HUGGINGFACE_TOKEN` from the environment. The sidecar is the natural home for a managed one.
 - **ModelScope adapter.** Mostly a CN mirror, so it earns its keep only for users HF is blocked for.
-- **Image-model sibling sets.** A diffusion repo needs its vae/clip/encoder files together in the layout autogen expects; the picker groups GGUF shards but does not know those sibling relationships. `MarkSelection` is the stopgap, not the fix: the files are now all *reachable*, but which ones belong together is still the user's problem.
+- **Image-model sibling sets: BUILT, outside this package.** A split DiT's companions (VAE, text encoder, tokenizer) are planned by `autogen.PlanImageCompanions` against the curated `internal/autogen/companions.json`, joined to the listing and the disk by `GET /api/hub/companions` (`internal/server/hubapi_companions.go`), and queued by the browser as ordinary jobs, one per companion repo. This package gained nothing for it on purpose: it stays autogen-free. Still open: video families, ERNIE (no verified ungated Ministral-3B source) and the vision mmproj an edit model wants.
 
 ## Connections
 
