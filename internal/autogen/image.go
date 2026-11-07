@@ -289,6 +289,28 @@ type imageComponents struct{ vae, clipL, clipG, t5, llm, llmVision, audioVae, to
 // ponytail: sd3 / qwen_image arms omitted — no such model on disk yet. Add an arm
 // (and any new EncoderSet field) when one lands; the "# arch=..." YAML comment on
 // the fallthrough names the arch to wire.
+// imageEncoderArch names the text-encoder ARCHITECTURE a DiT family was
+// trained against, where width alone admits a wrong one (see
+// EncoderPool.LlmArch). "" = no restriction, the width match decides.
+//
+// Shipped knowledge, from each publisher's model card, and only for families
+// where a same-width impostor is a real, common install: Qwen3-4B and
+// Qwen3-VL-4B (2560), Qwen3-8B and Qwen3-VL-8B (4096). Name-matched for the
+// same reason resolveComponents' arms are: FLUX.2/3 report arch "flux" and
+// Z-Image "lumina2", shared with families that want something else (Lumina
+// proper conditions on Gemma-2, so "lumina" is NOT keyed here).
+func imageEncoderArch(arch, name string) string {
+	switch {
+	case strings.Contains(name, "flux-3") || strings.Contains(name, "flux3"):
+		return "qwen3vl" // FLUX.3 klein: Qwen3-VL-4B-Instruct
+	case strings.Contains(name, "klein"):
+		return "qwen3" // FLUX.2 klein: Qwen3-4B (4B) / Qwen3-8B (9B)
+	case arch == "z_image" || strings.Contains(name, "z-image") || strings.Contains(name, "z_image"):
+		return "qwen3" // Z-Image: Qwen3-4B
+	}
+	return ""
+}
+
 func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *EncoderPool, condHidden int64, vid videoInfo) (c imageComponents, missing []string) {
 	a := strings.ToLower(strings.TrimSpace(arch))
 	n := strings.ToLower(name)
@@ -325,12 +347,13 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 			preferLlm = h
 		}
 	}
-	autoLlm, autoVision := pool.Llm(condHidden, wantVision, preferLlm)
+	encArch := imageEncoderArch(a, n)
+	autoLlm, autoVision := pool.LlmArch(condHidden, wantVision, preferLlm, encArch)
 	if autoLlm == "" && wantVision {
 		// No vision-capable encoder of that width: fall back to a text-only one
 		// rather than emitting nothing, and let the missing projector show up as
 		// the model producing unconditioned output rather than as a dead server.
-		autoLlm, autoVision = pool.Llm(condHidden, false, preferLlm)
+		autoLlm, autoVision = pool.LlmArch(condHidden, false, preferLlm, encArch)
 	}
 	llmDefault := autoLlm
 	if llmDefault == "" && !pool.knowsLlm(enc.QwenLlm) {

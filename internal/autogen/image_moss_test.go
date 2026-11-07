@@ -128,3 +128,39 @@ func TestAutogen_resolveComponentsMossAndFlux3(t *testing.T) {
 		t.Errorf("flux3 defaults = %+v", d)
 	}
 }
+
+// Qwen3-4B and Qwen3-VL-4B are both 2560 wide, so width cannot say which a DiT
+// wants. The real box that found this: a Qwen3-4B qwenLlm pin (for Z-Image)
+// won FLUX.3's 8 x 2560 match, and with no pin the larger VL file won Z-Image's.
+func TestAutogen_ImageEncoderArch(t *testing.T) {
+	const q3, vl = "/m/Qwen3-4B-Instruct-2507-Q4_K_M.gguf", "/m/Qwen3VL-4B-Instruct-Q8_0.gguf"
+	both := &EncoderPool{Files: []ComponentFile{
+		{Path: q3, Role: RoleLlm, Family: "qwen3", Width: 2560, SizeGB: 2.3},
+		{Path: vl, Role: RoleLlm, Family: "qwen3vl", Width: 2560, SizeGB: 4.0},
+	}}
+	cases := []struct {
+		label, arch, name string
+		cond              int64
+		pin, want         string
+		pool              *EncoderPool
+	}{
+		{"flux3, q3 pin", "flux", "flux-3-image-klein-q8_0", 20480, q3, vl, both},
+		{"flux3, no pin", "flux", "flux-3-image-klein-q8_0", 20480, "", vl, both},
+		{"z-image, no pin", "lumina2", "z-image-turbo-q8_0", 2560, "", q3, both},
+		{"z-image, vl pin", "lumina2", "z-image-turbo-q8_0", 2560, vl, q3, both},
+		{"klein 4b, no pin", "flux", "flux-2-klein-4b-q8_0", 7680, "", q3, both},
+		// Only the impostor on disk: report the encoder missing rather than
+		// wire it (that is what makes the model browser offer the right one).
+		{"flux3, only q3", "flux", "flux-3-image-klein-q8_0", 20480, q3, "",
+			&EncoderPool{Files: both.Files[:1]}},
+	}
+	for _, c := range cases {
+		got, missing := resolveComponents(EncoderSet{QwenLlm: c.pin}, nil, c.arch, c.name, c.pool, c.cond, videoInfo{})
+		if got.llm != c.want {
+			t.Errorf("%s: llm = %q, want %q", c.label, got.llm, c.want)
+		}
+		if c.want == "" && !strings.Contains(strings.Join(missing, ","), "llm") {
+			t.Errorf("%s: missing = %v, want llm reported", c.label, missing)
+		}
+	}
+}

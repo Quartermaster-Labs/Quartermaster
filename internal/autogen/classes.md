@@ -202,6 +202,14 @@ shipped knowledge about what DiTs are trained against, not per-machine tuning. D
 (`mtp-*`, dflash) and pooled embedders are excluded outright: their widths collide with real
 encoders and neither can condition anything.
 
+**Where width is not enough, the ARCHITECTURE is pinned per family** (`imageEncoderArch` ->
+`EncoderPool.LlmArch`, matched on the gguf's `general.architecture`, recorded as `Family`): FLUX.3
+-> `qwen3vl`, FLUX.2 klein and Z-Image -> `qwen3`. Qwen3-4B / Qwen3-VL-4B (2560) and Qwen3-8B /
+Qwen3-VL-8B (4096) are each one width, and on the dev box the global pin handed FLUX.3 the text-only
+4B while file size handed klein 9B the VL 8B, silently. The restriction gates the pin too; a
+family-less (safetensors) encoder is not excluded, and with only the impostor on disk the `llm` role
+is reported missing, which is what makes the model browser offer the right file.
+
 A declared `settings.encoders.qwenLlm` of the matching width wins outright (`EncoderPool.Llm`
 takes it as `prefer`), and a per-model `textEncoderPath` wins over even that: the scan narrows the
 field, the declaration names the file. Without one, two same-width Qwen candidates of the same

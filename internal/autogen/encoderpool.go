@@ -676,6 +676,25 @@ func better(f, best ComponentFile) bool {
 //
 // Ties break by encoderArchRank, then file size, then path (see better).
 func (p *EncoderPool) Llm(hidden int64, wantVision bool, prefer string) (path, mmproj string) {
+	return p.LlmArch(hidden, wantVision, prefer, "")
+}
+
+// LlmArch is Llm restricted to one encoder ARCHITECTURE (the gguf's
+// general.architecture, recorded as Family), for a DiT whose trained-against
+// encoder shares its width with a different model. "" means no restriction.
+//
+// Width cannot separate Qwen3-4B (`qwen3`) from Qwen3-VL-4B (`qwen3vl`): both
+// are 2560 wide, and FLUX.3 (8 x 2560) wants the VL one while Z-Image and
+// FLUX.2 klein want the plain one. Before this, the answer was whichever won
+// the tiebreak (the larger file) or the single global qwenLlm pin, so ONE of
+// the two families was always wired wrong on a box that had both, with no
+// warning: a mismatched encoder renders, just not the asked-for picture.
+//
+// The restriction applies to the pin too: a pin of the wrong architecture is
+// ignored and the scan decides, exactly as for a pin of the wrong width. A
+// file of UNKNOWN family (a safetensors encoder, which records no arch) is not
+// excluded: only a positively different architecture is.
+func (p *EncoderPool) LlmArch(hidden int64, wantVision bool, prefer, arch string) (path, mmproj string) {
 	if p == nil {
 		return "", ""
 	}
@@ -694,6 +713,9 @@ func (p *EncoderPool) Llm(hidden int64, wantVision bool, prefer string) (path, m
 			continue
 		}
 		if wantVision && !f.Vision {
+			continue
+		}
+		if arch != "" && f.Family != "" && !strings.EqualFold(f.Family, arch) {
 			continue
 		}
 		if pin != "" && config.PathKey(f.Path) == pin {

@@ -348,7 +348,10 @@ const hashCacheSuffix = ".modelhash"
 // v116: FLUX.2 / FLUX.3 (dev and klein) declare in: [text, image]. One
 // checkpoint generates and edits, so no edit token in the name caught it, and
 // the playground fell through to img2img. Capability only: no --llm_vision.
-const genVersion = "v116"
+// v117: FLUX.3, FLUX.2 klein and Z-Image restrict their text encoder by gguf
+// ARCHITECTURE (imageEncoderArch), so a same-width Qwen3 / Qwen3-VL no longer
+// wins on a global pin or file size; FLUX.3 moves from Qwen3-4B to Qwen3-VL-4B.
+const genVersion = "v117"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight
