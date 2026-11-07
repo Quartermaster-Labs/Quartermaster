@@ -65,6 +65,7 @@ func TestIsImageArch(t *testing.T) {
 func TestEmitImageModel(t *testing.T) {
 	var b strings.Builder
 	var emitted []string
+	onDisk(t, "ae.safetensors", "clip_l.safetensors", "t5xxl.gguf", "zae.safetensors", "qwen3.gguf")
 	pool := EncoderSet{FluxVae: "ae.safetensors", ClipL: "clip_l.safetensors", T5: "t5xxl.gguf", ZimageVae: "zae.safetensors", QwenLlm: "qwen3.gguf"}
 	s := Settings{SdServerExe: "sd-server", TtlSec: 600, TargetVramGB: 7, VramOverheadGB: 0.5, Threads: 7, Encoders: pool}
 
@@ -260,7 +261,8 @@ func TestResolveComponents_DeclaredLlmWins(t *testing.T) {
 			Mmproj: "/m/QwenVL/mmproj-Qwen3VL-4B-Instruct-F16.gguf"},
 		{Path: pin, Role: RoleLlm, Width: 2560, SizeGB: 3.99},
 	}}
-	enc := EncoderSet{ZimageVae: "/m/ae.safetensors", QwenLlm: pin}
+	onDisk(t, "ae.safetensors")
+	enc := EncoderSet{ZimageVae: "ae.safetensors", QwenLlm: pin}
 	c, m := resolveComponents(enc, nil, "lumina2", "Z-Image-Turbo", pool, 2560, videoInfo{})
 	if len(m) != 0 {
 		t.Fatalf("missing = %v, want none", m)
@@ -307,6 +309,7 @@ func TestMergeImageVariant(t *testing.T) {
 // 4096-wide Qwen3-8B. The variants differ only in that arithmetic, which is why
 // none of them is named here -- the width match resolves all three.
 func TestResolveComponents_Flux2Klein(t *testing.T) {
+	onDisk(t, "f2ae", "elsewhere-qwen3-8b.gguf")
 	enc := EncoderSet{Flux2Vae: "f2ae", QwenLlm: "/m/qwen3-4b.gguf"}
 	pool := &EncoderPool{Files: []ComponentFile{
 		{Path: "/m/qwen3-8b.gguf", Role: RoleLlm, Family: "qwen3", Width: 4096, SizeGB: 8},
@@ -333,8 +336,8 @@ func TestResolveComponents_Flux2Klein(t *testing.T) {
 	}
 	// A pin the scan never saw (kept outside the models root) is still honoured:
 	// that is the case the fallback exists for.
-	unseen := EncoderSet{Flux2Vae: "f2ae", QwenLlm: "/elsewhere/qwen3-8b.gguf"}
-	if c, m := resolveComponents(unseen, nil, "flux", "Flux2-Klein-9B-True-v2-Q8_0", only4b, 12288, videoInfo{}); c.llm != "/elsewhere/qwen3-8b.gguf" || len(m) != 0 {
+	unseen := EncoderSet{Flux2Vae: "f2ae", QwenLlm: "elsewhere-qwen3-8b.gguf"}
+	if c, m := resolveComponents(unseen, nil, "flux", "Flux2-Klein-9B-True-v2-Q8_0", only4b, 12288, videoInfo{}); c.llm != "elsewhere-qwen3-8b.gguf" || len(m) != 0 {
 		t.Errorf("an unscanned pin should still be honoured: got %+v missing=%v", c, m)
 	}
 }

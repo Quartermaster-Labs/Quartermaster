@@ -415,6 +415,11 @@ own prompt rewriter and render a confidently unrelated picture. Emit output chan
 - **`settings.encoders` is now a PIN, not the source.** Diffusion component paths are
   discovered structurally (`encoderpool.go`, see `classes.md`), and `fillEncoderSet` fills only
   the roles left blank, so a declared path always wins and no existing config changes behaviour.
+  **Except a declared file that is GONE** (v118, `declaredGone`): not in the scan AND `os.Stat`
+  says not-exist (any other stat error keeps it). It is cleared before the fill. Kept, it read
+  as satisfied: the regen emitted a flag at a missing file and the model browser never offered
+  the part, because nothing was "missing". Found by moving the FLUX.2 VAE out of the models tree
+  with `flux2Vae` still pinned to it. Test fixtures declaring bare names need `onDisk(t, ...)`.
   `qwenLlm` was the exception until v71: the scan ignored a declared pin whenever it found any
   encoder of the DiT's width, so the Qwen3-4B vs Qwen3-VL-4B tie silently overrode the user.
   `EncoderPool.Llm` now takes the declaration as `prefer` and returns it when it clears the same

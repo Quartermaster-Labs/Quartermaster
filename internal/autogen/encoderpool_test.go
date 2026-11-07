@@ -286,6 +286,20 @@ func TestAutogen_EncoderPoolLlmPrefer(t *testing.T) {
 	}
 }
 
+// onDisk moves the test into a fresh directory holding an empty file for each
+// relative name, so a declared component path like "ae.safetensors" exists:
+// fillEncoderSet clears declared files that are gone, and a fixture naming a
+// file that is not there would read as a model missing that part.
+func onDisk(t *testing.T, names ...string) {
+	t.Helper()
+	t.Chdir(t.TempDir())
+	for _, n := range names {
+		if err := os.WriteFile(n, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestAutogen_fillEncoderSet(t *testing.T) {
 	p := &EncoderPool{Files: []ComponentFile{
 		{Path: "/m/ae.safetensors", Role: RoleVae, Family: VaeFamilyFlux},
@@ -293,9 +307,24 @@ func TestAutogen_fillEncoderSet(t *testing.T) {
 		{Path: "/m/clip_l.safetensors", Role: RoleClip, Width: 768},
 		{Path: "/m/t5xxl.gguf", Role: RoleT5, Width: 4096},
 	}}
-	got := fillEncoderSet(EncoderSet{ClipL: "/hand/clip_l.safetensors"}, p)
-	if got.ClipL != "/hand/clip_l.safetensors" {
+	// A declared file outside the scan still wins, as long as it exists.
+	hand := filepath.Join(t.TempDir(), "clip_l.safetensors")
+	if err := os.WriteFile(hand, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := fillEncoderSet(EncoderSet{ClipL: hand}, p)
+	if got.ClipL != hand {
 		t.Errorf("declared ClipL was overwritten: %q", got.ClipL)
+	}
+	// A declared file that is gone is cleared, so the pool fills the slot
+	// (the flux2 VAE moved out of the models folder must not read as present).
+	gone := fillEncoderSet(EncoderSet{Flux2Vae: filepath.Join(t.TempDir(), "moved", "ae.safetensors")}, p)
+	if gone.Flux2Vae != "/m/flux2-ae.safetensors" {
+		t.Errorf("missing declared flux2Vae = %q, want the pool's", gone.Flux2Vae)
+	}
+	// ...and a declared path the pool lists is kept without touching the disk.
+	if kept := fillEncoderSet(EncoderSet{T5: "/m/t5xxl.gguf"}, p); kept.T5 != "/m/t5xxl.gguf" {
+		t.Errorf("pool-listed declared t5 = %q", kept.T5)
 	}
 	if got.FluxVae != "/m/ae.safetensors" || got.Flux2Vae != "/m/flux2-ae.safetensors" {
 		t.Errorf("vae fill = %q / %q", got.FluxVae, got.Flux2Vae)

@@ -3,6 +3,7 @@ package autogen
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -864,10 +865,25 @@ func InvalidateEncoderPool() {
 // a deliberate statement about a machine, and silently second-guessing it would
 // make a working config drift.
 //
+// The one exception is a declared file that no longer EXISTS. It is cleared
+// first, so the pool fills the slot or the role is reported missing. Kept, it
+// read as satisfied: the regen emitted a flag at a path sd-server then failed to
+// open, with no warning, and the model browser never offered the file again
+// because nothing was "missing". Moving one encoder out of the models folder
+// was enough to hit it.
+//
 // The hints exist because a family can hold more than one file (see Vae).
 func fillEncoderSet(declared EncoderSet, p *EncoderPool) EncoderSet {
 	if p == nil {
 		return declared
+	}
+	for _, dst := range []*string{
+		&declared.FluxVae, &declared.ClipL, &declared.ClipG, &declared.T5, &declared.SdxlVae,
+		&declared.ZimageVae, &declared.QwenLlm, &declared.Flux2Vae, &declared.VideoVae, &declared.AudioVae,
+	} {
+		if declaredGone(*dst, p) {
+			*dst = ""
+		}
 	}
 	fill := func(dst *string, v string) {
 		if strings.TrimSpace(*dst) == "" {
@@ -894,6 +910,26 @@ func fillEncoderSet(declared EncoderSet, p *EncoderPool) EncoderSet {
 	fill(&declared.ClipG, p.Clip(1280))
 	fill(&declared.T5, p.T5())
 	return declared
+}
+
+// declaredGone reports a declared component path that is provably absent: the
+// scan did not find it AND the filesystem says it does not exist. A file the pool
+// lists is present by construction, and any stat error other than not-exist
+// (permissions, a slow share) keeps the declaration, since dropping a working
+// path on a transient error would rewire a model behind the user's back.
+func declaredGone(path string, p *EncoderPool) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	key := config.PathKey(path)
+	for _, f := range p.Files {
+		if config.PathKey(f.Path) == key {
+			return false
+		}
+	}
+	_, err := os.Stat(path)
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // projectorBeside returns the vision projector paired to a given text-encoder

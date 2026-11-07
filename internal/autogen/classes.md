@@ -152,7 +152,7 @@ and the encoder-shaped names are excluded.
 per machine, which broke on every models-tree move and made a newly downloaded diffusion model
 a config chore. `ScanEncoderPool` now classifies every component on disk from its header, and
 `fillEncoderSet` fills only the roles the user left blank (**a declared path always wins**, so
-existing configs are untouched).
+existing configs are untouched), after clearing any declared path whose file no longer exists.
 
 Everything it keys on is structural, because filenames are not: three unrelated files on the
 dev box are all named `ae.safetensors`, and two of those are byte-identical copies.

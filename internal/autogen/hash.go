@@ -351,7 +351,10 @@ const hashCacheSuffix = ".modelhash"
 // v117: FLUX.3, FLUX.2 klein and Z-Image restrict their text encoder by gguf
 // ARCHITECTURE (imageEncoderArch), so a same-width Qwen3 / Qwen3-VL no longer
 // wins on a global pin or file size; FLUX.3 moves from Qwen3-4B to Qwen3-VL-4B.
-const genVersion = "v117"
+// v118: a declared settings.encoders path whose file is gone is cleared before the
+// pool fill (declaredGone), so the scan supplies the part or it is reported missing
+// instead of emitting a flag at a path sd-server cannot open.
+const genVersion = "v118"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight
