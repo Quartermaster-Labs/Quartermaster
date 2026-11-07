@@ -185,7 +185,10 @@ reads `transformer.caption_channels` (3840) out of it via `captionChannelsFrom`,
 never overrules it.
 
 The caption width may be a MULTIPLE of the encoder's (`captionLayouts` {1, 3, 8}): FLUX.2 Klein
-stacks 3 hidden layers of its Qwen3 encoder, FLUX.3 Klein 8 (20480 = 8 x 2560, Qwen3-VL-4B). MOSS
+stacks 3 hidden layers of its Qwen3 encoder, FLUX.3 Klein 8 (20480 = 8 x 2560, Qwen3-VL-4B). Both
+lines are unified generate-and-edit checkpoints, so `fluxRefEditRe` (name-matched: they report arch
+`flux`) declares `in: [text, image]`; unlike Qwen-Image 2.1 they read references through the VAE,
+not a vision tower, so they get no `--llm_vision`. MOSS
 (`moss_image`, 4096) is the one family conditioned on a RECURRENT LLM (Qwen3.5-9B, GatedDeltaNet),
 which the ordinary `llm` role withholds on purpose, so it resolves through its own
 `RoleRecurrentLlm` plus a separate `RoleTokenizer` (MOSS's sd.cpp path reads the tokenizer from a

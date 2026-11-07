@@ -452,6 +452,16 @@ func TestAutogen_IsReferenceEditModel(t *testing.T) {
 		{name: "qwen_image-q8_0", want: false},
 		// An explicit off still wins over the version match.
 		{name: "qwen_image_2.1-q8_0", ov: &Override{RefEdit: "off"}, want: false},
+		// FLUX.2 / FLUX.3: one checkpoint generates and edits, so no edit token.
+		{name: "flux-3-image-klein-UD-Q8_K_XL", want: true},
+		{name: "flux-2-klein-4b-Q8_0", want: true},
+		{name: "flux2-dev-Q4_K_M", want: true},
+		{name: "FLUX.2-klein-9B", want: true},
+		{name: "flux-3-image-klein-Q8_0", ov: &Override{RefEdit: "off"}, want: false},
+		// flux.1 base is text-only, and "flux-1" must not read as "flux".
+		{name: "flux1-dev-Q8_0", want: false},
+		{name: "flux-1-schnell", want: false},
+		{name: "fluxed-23-merge", want: false},
 	}
 	for _, tc := range cases {
 		if got := IsReferenceEditModel(tc.name, tc.ov); got != tc.want {

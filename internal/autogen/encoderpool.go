@@ -921,6 +921,20 @@ var editModelRe = regexp.MustCompile(`(?i)(^|[-_. ])(edit|rapid|kontext|instruct
 // frame instead of editing against a reference.
 var unifiedEditRe = regexp.MustCompile(`(?i)(^|[-_. ])qwen[-_. ]?image[-_. ]?2\.1([-_. ]|$)`)
 
+// fluxRefEditRe matches the FLUX.2 / FLUX.3 line (dev and klein), which is
+// unified the same way: BFL ships one checkpoint for text-to-image, a single
+// reference edit and multi-reference composition (FLUX.3 klein's card: "up to
+// 10 reference images ... through the same model"). Every converter tags these
+// general.architecture "flux", the same as flux.1, so the name is again the
+// only signal; it is the same set resolveComponents' klein arm keys on.
+//
+// Kept OUT of unifiedEditRe on purpose, because that one also drives
+// wantsVisionEncoder. FLUX takes its references through the VAE, as latent
+// sequence tokens, not through the text encoder's vision tower: klein 4B/9B
+// condition on text-only Qwen3, so there is no projector to pair and a
+// --llm_vision would be a wasted load at best. Only the capability changes.
+var fluxRefEditRe = regexp.MustCompile(`(?i)(^|[-_. ])(flux[-_. ]?[23]|klein)([-_. ]|$)`)
+
 // wantsVisionEncoder reports whether this model should get --llm_vision. Only
 // llm-conditioned families are candidates: flux.1 edit models condition through
 // T5, which has no vision tower at all.
@@ -956,7 +970,7 @@ func IsReferenceEditModel(name string, ov *Override) bool {
 			return false
 		}
 	}
-	return refEditRe.MatchString(name) || unifiedEditRe.MatchString(name)
+	return refEditRe.MatchString(name) || unifiedEditRe.MatchString(name) || fluxRefEditRe.MatchString(name)
 }
 
 func wantsVisionEncoder(arch, name string, ov *Override) bool {

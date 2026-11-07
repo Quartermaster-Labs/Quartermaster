@@ -345,7 +345,10 @@ const hashCacheSuffix = ".modelhash"
 // v114: parakeet-server is health-checked on /health instead of "none".
 // v115: MOSS-Image (recurrent Qwen3.5 encoder + --tokenizer) and FLUX.3 klein
 // (8-layer caption concat) are wired; the FLUX.2 small decoder leaves the pool.
-const genVersion = "v115"
+// v116: FLUX.2 / FLUX.3 (dev and klein) declare in: [text, image]. One
+// checkpoint generates and edits, so no edit token in the name caught it, and
+// the playground fell through to img2img. Capability only: no --llm_vision.
+const genVersion = "v116"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight
