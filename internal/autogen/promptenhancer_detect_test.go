@@ -98,6 +98,12 @@ func TestAutogen_IsPromptEnhancerFile(t *testing.T) {
 	if !IsPromptEnhancerFile("/d/models/Qwen-Image-2.1-PE-I2I-BF16.gguf") {
 		t.Error("PE gguf not recognised")
 	}
+	// The quant tag joined by "." to the direction token, as prithivMLmods
+	// names them. Missed, the file is a qwen35 4096-wide hybrid, the same shape
+	// MOSS-Image's real encoder has.
+	if !IsPromptEnhancerFile("/d/models/Qwen-Image-2.1-PE-I2I.Q5_K_M.gguf") {
+		t.Error("PE gguf with a dotted quant tag not recognised")
+	}
 	if IsPromptEnhancerFile("/d/models/Qwen3-VL-8B-Instruct-Q8_0.gguf") {
 		t.Error("a real text encoder was withheld from the pool")
 	}

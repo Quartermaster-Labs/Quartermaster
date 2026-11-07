@@ -26,6 +26,33 @@ else to 502 — the browser renders these bodies verbatim, so they are written t
 `Manager.OnComplete` is wired to `s.regenReload()`, so a finished download registers itself instead
 of waiting on the `-watch-models` poll.
 
+## `hubapi_companions.go` - `GET /api/hub/companions?source=&repo=&path=`
+
+What an image DiT needs beside itself, asked before it is downloaded. Reads the candidate's header
+through the same `hubModelMeta` cache the estimate uses (so a repo open costs one header fetch for
+both), then `autogen.PlanImageCompanions(settings, meta, repo+"/"+path)`. The repo path is passed
+as the name because several families are told apart only by name ("flux-3", "moss-image") and a
+bare quant filename often does not carry it.
+
+Response `{image, family, missing, companions[{role,label,source,repo,path,sizeBytes,state}], unsourced}`.
+`image:false` = not a split diffusion model (LLM, or an SD/SDXL full checkpoint): show nothing.
+Each companion is placed by `companionState`:
+
+- `local`: on disk at full size per the hub manifest (`LocalFiles`). Checked even though the plan
+  already excludes what the encoder pool sees, because the pool scan is cached for 30 s and a
+  companion that just finished must not be offered again.
+- `downloading`: a non-terminal job of that repo lists the path (paused counts).
+- `unavailable`: the recipe names it, the hub listing no longer does. The recipe went stale
+  upstream; the UI says so rather than queueing a job that 404s.
+- `needed`: everything else, with the hub's size.
+
+Every recipe source is Hugging Face (`companionSource = "hf"`), whichever hub the DiT came from.
+Failures are a 200 with `error` set, as for the estimate route.
+
+`OnComplete` calls `autogen.InvalidateEncoderPool()` before `regenReload`: the browser queues a
+DiT and its companions together, a 300 MB VAE lands seconds after the previous regen scanned the
+pool, and the 30 s cache would otherwise wire the model without it.
+
 ## `hubapi_estimate.go` — `GET /api/hub/estimate`
 
 The browser's **real** pre-download sizing: how much *context* a candidate leaves room for, not

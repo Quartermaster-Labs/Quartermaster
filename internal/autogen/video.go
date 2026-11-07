@@ -157,6 +157,9 @@ type genDefaults struct {
 	height  int
 	frames  int
 	fps     int
+	// flowShift is --flow-shift, the flow-matching timestep shift. No override
+	// field: a hand-written --flow-shift suppresses it through sdFlagTable.
+	flowShift float64
 }
 
 // videoDefaultsFor returns the family profile. An image model gets the zero

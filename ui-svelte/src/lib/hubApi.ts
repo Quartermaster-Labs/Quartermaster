@@ -441,6 +441,40 @@ export function startHubDownload(
   });
 }
 
+/**
+ * A file an image model needs beside its DiT (VAE, text encoder, tokenizer).
+ * state: "local" already on disk, "downloading" a live job carries it,
+ * "needed" queued with the model, "unavailable" the recipe names it but the hub
+ * no longer lists it.
+ */
+export interface HubCompanion {
+  role: string;
+  label: string;
+  source: string;
+  repo: string;
+  path: string;
+  sizeBytes: number;
+  state: "local" | "downloading" | "needed" | "unavailable";
+}
+
+/**
+ * The server's answer for one DiT. image=false means "not a split diffusion
+ * model": show nothing. unsourced are roles it needs that no recipe covers.
+ */
+export interface HubCompanions {
+  image: boolean;
+  family: string;
+  missing: string[];
+  companions: HubCompanion[];
+  unsourced: string[];
+  error?: string;
+}
+
+export function getHubCompanions(repo: string, path: string, source = "hf"): Promise<HubCompanions> {
+  const q = new URLSearchParams({ source, repo, path });
+  return hubFetch<HubCompanions>(`/api/hub/companions?${q}`);
+}
+
 function jobAction(path: string, jobId: string): Promise<unknown> {
   return hubFetch(path, {
     method: "POST",

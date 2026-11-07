@@ -67,6 +67,13 @@ func promptEnhancerName(id string) (dir, family string, ok bool) {
 	peAt := -1
 	dirAt := -1
 	for i, p := range parts {
+		// Match on the token up to its first ".": the quant tag usually rides
+		// on the last word ("Qwen-Image-2.1-PE-I2I.Q5_K_M"), which left the
+		// direction reading "i2i.q5" and the file passing as a plain encoder.
+		// The cut below still slices the untrimmed parts, so "2.1" survives.
+		if j := strings.IndexByte(p, '.'); j > 0 {
+			p = p[:j]
+		}
 		switch p {
 		case "pe":
 			if peAt < 0 {

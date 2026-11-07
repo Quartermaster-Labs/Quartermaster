@@ -479,7 +479,7 @@ func TestAutogen_EncoderPoolLlmConcat(t *testing.T) {
 	if got, _ := p.Llm(12288, false, "/m/qwen3-4b.gguf"); got != "/m/qwen3-8b.gguf" {
 		t.Errorf("llm(12288, pin=4b) = %q, want the pin ignored", got)
 	}
-	// 12288/1024 = 12, past maxCaptionConcat: a narrow encoder is not a candidate
+	// 12288/1024 = 12, not a known caption layout: a narrow encoder is not a candidate
 	// just because the arithmetic works.
 	narrow := &EncoderPool{Files: []ComponentFile{
 		{Path: "/m/tiny-1024.gguf", Role: RoleLlm, Family: "qwen3", Width: 1024, SizeGB: 1},

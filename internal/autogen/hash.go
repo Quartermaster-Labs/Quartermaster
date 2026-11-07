@@ -343,7 +343,9 @@ const hashCacheSuffix = ".modelhash"
 // v113: qwen3_asr takes the Qwen3 ForcedAligner (and an absolute VAD path)
 // as session options when one is on disk, for word timestamps.
 // v114: parakeet-server is health-checked on /health instead of "none".
-const genVersion = "v114"
+// v115: MOSS-Image (recurrent Qwen3.5 encoder + --tokenizer) and FLUX.3 klein
+// (8-layer caption concat) are wired; the FLUX.2 small decoder leaves the pool.
+const genVersion = "v115"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

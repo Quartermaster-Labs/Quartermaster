@@ -184,6 +184,15 @@ reads `transformer.caption_channels` (3840) out of it via `captionChannelsFrom`,
 `scan.condHidden` is 0. A tensor shape is what the model actually runs with, so the config blob
 never overrules it.
 
+The caption width may be a MULTIPLE of the encoder's (`captionLayouts` {1, 3, 8}): FLUX.2 Klein
+stacks 3 hidden layers of its Qwen3 encoder, FLUX.3 Klein 8 (20480 = 8 x 2560, Qwen3-VL-4B). MOSS
+(`moss_image`, 4096) is the one family conditioned on a RECURRENT LLM (Qwen3.5-9B, GatedDeltaNet),
+which the ordinary `llm` role withholds on purpose, so it resolves through its own
+`RoleRecurrentLlm` plus a separate `RoleTokenizer` (MOSS's sd.cpp path reads the tokenizer from a
+file, not from the gguf). The FLUX.2 "small decoder" MOSS ships as its own `vae/` (same 32-ch
+latent, `decoder.conv_in` out 384 not 512) is excluded from the VAE pool: sd.cpp builds the FLUX.2
+autoencoder at a fixed width and cannot load it, so MOSS's companion recipe is the full flux2 ae.
+
 Width is **not** an identity on its own (five unrelated 2560-wide models are installed here), so
 ties break on `encoderArchRank` first: Qwen > Mistral > Gemma/Llama > unknown. That table is
 shipped knowledge about what DiTs are trained against, not per-machine tuning. Drafter sidecars

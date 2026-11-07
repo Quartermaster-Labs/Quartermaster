@@ -41,6 +41,9 @@ var sdFlagTable = []FlagDef{
 	{Name: "--t5xxl", Knob: "t5Path", Value: true},
 	{Name: "--llm", Knob: "textEncoderPath", Value: true},
 	{Name: "--llm_vision", Knob: "llmVisionPath", Value: true},
+	// A standalone HF tokenizer.json (MOSS-Image's Qwen3.5 vocab). No override
+	// field: a hand-written --tokenizer simply suppresses the generated one.
+	{Name: "--tokenizer", Knob: "tokenizerPath", Value: true},
 	{Name: "--lora-model-dir", Knob: "loraDir", Value: true},
 
 	// Memory placement. --max-vram is NOT a VRAM cap: it is the size one merged

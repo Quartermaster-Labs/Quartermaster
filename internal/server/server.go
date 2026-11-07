@@ -348,7 +348,12 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	hfSrc := hub.NewHF()
 	hfSrc.Token = hubToken
 	s.hub = hub.NewManager(s.hubModelsRoot, noticeLogger(proxylog), hfSrc)
-	s.hub.OnComplete = func(hub.Job) error { return s.regenReload() }
+	s.hub.OnComplete = func(hub.Job) error {
+		// The job may have been a VAE or encoder (a companion download): the
+		// regen must see it, not a pool scanned a few seconds ago.
+		autogen.InvalidateEncoderPool()
+		return s.regenReload()
+	}
 	s.updater = update.New(updateRepo, build.Version, noticeLogger(proxylog))
 	go s.updater.Run(s.shutdownCtx)
 	s.routes()
@@ -1096,6 +1101,7 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/hub/model/{id...}", adminChain.ThenFunc(s.handleAPIHubModel))
 	mux.Handle("GET /api/hub/avatar", adminChain.ThenFunc(s.handleAPIHubAvatar))
 	mux.Handle("GET /api/hub/estimate", adminChain.ThenFunc(s.handleAPIHubEstimate))
+	mux.Handle("GET /api/hub/companions", adminChain.ThenFunc(s.handleAPIHubCompanions))
 	// The audio.cpp catalog: a curated view over the same downloader, built from
 	// the model_specs/ the installed backend ships (see audiocppcatalog.go).
 	mux.Handle("GET /api/hub/audiocpp", adminChain.ThenFunc(s.handleAPIHubAudioCpp))
