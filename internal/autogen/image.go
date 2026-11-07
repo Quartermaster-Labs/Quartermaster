@@ -275,20 +275,22 @@ func loraCategory(isVideo bool) string {
 // missing from the pool — see resolveComponents' missing list).
 type imageComponents struct{ vae, clipL, clipG, t5, llm, llmVision, audioVae, tokenizer string }
 
-// resolveComponents decides which component files a bare diffusion GGUF needs
-// from its architecture, draws them from the shared Settings.Encoders pool, then
-// lets an explicit per-model Override path win. It returns the resolved paths
-// plus the role names an arch REQUIRES that neither pool nor override supplied
-// (surfaced as a WARNING so a misconfigured model is visible, not silently broken).
-//
-// name disambiguates families an arch tag can't: Chroma reports arch "flux" but
-// removes the CLIP encoder (T5 only). SDXL/SD1 GGUFs are typically full
-// checkpoints (CLIP+VAE baked), so their VAE is optional (wired only if declared),
-// never required.
-//
-// ponytail: sd3 / qwen_image arms omitted — no such model on disk yet. Add an arm
-// (and any new EncoderSet field) when one lands; the "# arch=..." YAML comment on
-// the fallthrough names the arch to wire.
+// roles lists the components that resolved to a file, under the role names the
+// missing list uses (plus "llm_vision" for an auto-paired projector), so a
+// caller can show both halves of the answer side by side.
+func (c imageComponents) roles() []CompanionHave {
+	out := []CompanionHave{}
+	for _, r := range []CompanionHave{
+		{"vae", c.vae}, {"clip_l", c.clipL}, {"clip_g", c.clipG}, {"t5xxl", c.t5},
+		{"llm", c.llm}, {"llm_vision", c.llmVision}, {"tokenizer", c.tokenizer}, {"audio_vae", c.audioVae},
+	} {
+		if r.Path != "" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // imageEncoderArch names the text-encoder ARCHITECTURE a DiT family was
 // trained against, where width alone admits a wrong one (see
 // EncoderPool.LlmArch). "" = no restriction, the width match decides.
@@ -311,6 +313,20 @@ func imageEncoderArch(arch, name string) string {
 	return ""
 }
 
+// resolveComponents decides which component files a bare diffusion GGUF needs
+// from its architecture, draws them from the shared Settings.Encoders pool, then
+// lets an explicit per-model Override path win. It returns the resolved paths
+// plus the role names an arch REQUIRES that neither pool nor override supplied
+// (surfaced as a WARNING so a misconfigured model is visible, not silently broken).
+//
+// name disambiguates families an arch tag can't: Chroma reports arch "flux" but
+// removes the CLIP encoder (T5 only). SDXL/SD1 GGUFs are typically full
+// checkpoints (CLIP+VAE baked), so their VAE is optional (wired only if declared),
+// never required.
+//
+// ponytail: sd3 / qwen_image arms omitted — no such model on disk yet. Add an arm
+// (and any new EncoderSet field) when one lands; the "# arch=..." YAML comment on
+// the fallthrough names the arch to wire.
 func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *EncoderPool, condHidden int64, vid videoInfo) (c imageComponents, missing []string) {
 	a := strings.ToLower(strings.TrimSpace(arch))
 	n := strings.ToLower(name)
@@ -320,7 +336,8 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 	enc = fillEncoderSet(enc, pool)
 	// The text encoder is picked by MATCHING WIDTHS, not by name: the DiT states
 	// the encoder hidden size it was trained against, and each candidate reports
-	// its own. A declared EncoderSet.QwenLlm of that width wins outright, because
+	// its own. A declared EncoderSet.QwenLlm of that width (and, for the families
+	// imageEncoderArch keys, of that gguf architecture) wins outright, because
 	// width is not an identity: Qwen3-4B-Instruct-2507 and Qwen3-VL-4B-Instruct
 	// are both 2560 wide, and only the declaration says which one a given DiT was
 	// trained against. Without one the scan's pick is used, since a single global

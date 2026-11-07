@@ -94,4 +94,8 @@ func TestAutogen_PlanImageCompanionsSkipsLocal(t *testing.T) {
 	if !ok || strings.Join(plan.Missing, ",") != "llm,tokenizer" {
 		t.Errorf("missing = %v, want the vae satisfied from disk", plan.Missing)
 	}
+	// ...and the satisfied role is reported with the file that satisfies it.
+	if len(plan.Have) != 1 || plan.Have[0].Role != "vae" || filepath.Base(plan.Have[0].Path) != "ae.safetensors" {
+		t.Errorf("have = %+v, want the flux2 vae", plan.Have)
+	}
 }

@@ -253,6 +253,13 @@ quant of a repo is the same architecture) and, for an image model, draws a "This
 needs" box above the file table: each part's label, role and size, or "downloaded" /
 "downloading" / "unavailable".
 
+**Parts already on disk are listed too, by file** (`have`: the file name, the full path on hover,
+"on disk"), and when nothing is missing the heading becomes "Everything else this model needs is
+already downloaded". Before that, a DiT needing nothing showed no box at all, the same as an LLM
+repo, and a user could not tell "complete" from "not understood" (two reports in a row, both of
+which were correct behaviour). Naming the file also makes the encoder pick visible BEFORE the
+download: a wrong same-width encoder is otherwise invisible until a render comes out off-prompt.
+
 **Visible with an opt-out, never silent.** The toggle ("Download them with the model, N GB more")
 defaults ON, because a DiT without its encoder loads and then fails every render. But a 9.5 GB
 encoder behind a 5 GB pick must not be a surprise, which is why the sizes are stated before the

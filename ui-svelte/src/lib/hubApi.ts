@@ -460,6 +460,7 @@ export interface HubCompanion {
 /**
  * The server's answer for one DiT. image=false means "not a split diffusion
  * model": show nothing. unsourced are roles it needs that no recipe covers.
+ * have are roles already satisfied from disk, with the file each will use.
  */
 export interface HubCompanions {
   image: boolean;
@@ -467,6 +468,7 @@ export interface HubCompanions {
   missing: string[];
   companions: HubCompanion[];
   unsourced: string[];
+  have: { role: string; path: string }[];
   error?: string;
 }
 

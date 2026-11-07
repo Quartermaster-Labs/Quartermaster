@@ -691,6 +691,8 @@
     vae: "VAE",
     llm: "text encoder",
     tokenizer: "tokenizer",
+    llm_vision: "vision projector",
+    audio_vae: "audio VAE",
     clip_l: "CLIP-L encoder",
     clip_g: "CLIP-G encoder",
     t5xxl: "T5-XXL encoder",
@@ -1182,11 +1184,16 @@
               <!-- Companion files: what this image model needs beside the DiT.
                    Shown with sizes and an opt-out rather than pulled silently,
                    because a 9 GB encoder behind a 5 GB pick is a surprise
-                   otherwise. Parts the disk already satisfies never reach here
-                   (the server lists only what a regen would call missing). -->
-              {#if companions && (companionRows.length || companions.unsourced.length)}
+                   otherwise. Parts the disk already satisfies are listed too,
+                   by the file the next regen will wire: without them "needs
+                   nothing" and "not understood" both showed no box at all, and
+                   which same-width encoder got picked was invisible. -->
+              {#if companions && (companionRows.length || companions.unsourced.length || companions.have?.length)}
+                {@const needsMore = companionRows.length > 0 || companions.unsourced.length > 0}
                 <div class="mb-3 rounded border border-card-border bg-secondary/20 p-2.5 text-xs">
-                  <div class="mb-1.5 font-medium text-txtmain">This model also needs</div>
+                  <div class="mb-1.5 font-medium text-txtmain">
+                    {needsMore ? "This model also needs" : "Everything else this model needs is already downloaded"}
+                  </div>
                   <ul class="space-y-1">
                     {#each companionRows as c (c.role)}
                       <li class="flex items-baseline gap-2">
@@ -1202,6 +1209,15 @@
                           {:else}
                             <span class="text-txtsecondary">{humanBytes(c.sizeBytes)}</span>
                           {/if}
+                        </span>
+                      </li>
+                    {/each}
+                    {#each companions.have ?? [] as h (h.role)}
+                      <li class="flex items-baseline gap-2">
+                        <span class="min-w-0 truncate text-txtmain" use:tip={h.path}>{h.path.split(/[\\/]/).pop()}</span>
+                        <span class="text-micro uppercase tracking-wide text-txtsecondary">{roleName(h.role)}</span>
+                        <span class="ml-auto whitespace-nowrap">
+                          <span class="inline-flex items-center gap-0.5 text-success"><Check class="w-3 h-3" /> on disk</span>
                         </span>
                       </li>
                     {/each}

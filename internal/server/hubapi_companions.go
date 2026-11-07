@@ -43,7 +43,10 @@ type hubCompanionsResp struct {
 	Missing    []string       `json:"missing"`
 	Companions []hubCompanion `json:"companions"`
 	Unsourced  []string       `json:"unsourced"`
-	Err        string         `json:"error,omitempty"`
+	// Have are roles already satisfied from disk, with the file each resolves
+	// to: the box shows them so "needs nothing" is visible as such.
+	Have []autogen.CompanionHave `json:"have"`
+	Err  string                  `json:"error,omitempty"`
 }
 
 // companionSource is the hub every recipe entry points at. companions.json
@@ -82,7 +85,7 @@ func (s *Server) handleAPIHubCompanions(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) hubCompanions(r *http.Request, src hub.Source, repo, path string, set autogen.Settings) hubCompanionsResp {
-	out := hubCompanionsResp{Missing: []string{}, Companions: []hubCompanion{}, Unsourced: []string{}}
+	out := hubCompanionsResp{Missing: []string{}, Companions: []hubCompanion{}, Unsourced: []string{}, Have: []autogen.CompanionHave{}}
 
 	det, err := src.Detail(r.Context(), repo)
 	if err != nil {
@@ -120,6 +123,7 @@ func (s *Server) hubCompanions(r *http.Request, src hub.Source, repo, path strin
 	out.Image, out.Family = true, plan.Family
 	out.Missing = append(out.Missing, plan.Missing...)
 	out.Unsourced = append(out.Unsourced, plan.Unsourced...)
+	out.Have = append(out.Have, plan.Have...)
 
 	csrc, ok := s.hub.Source(companionSource)
 	if !ok {

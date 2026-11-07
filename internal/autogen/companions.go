@@ -105,6 +105,18 @@ type CompanionPlan struct {
 	// missing role, when no recipe matched). The browser says so rather than
 	// implying the model is complete.
 	Unsourced []string `json:"unsourced"`
+	// Have are the roles the disk already satisfies, with the file the next
+	// regen will wire to each. Without them a model needing nothing looks the
+	// same as a model the planner does not understand (the browser shows no box
+	// either way), and a wrong same-width encoder pick is invisible until the
+	// first render comes out off-prompt.
+	Have []CompanionHave `json:"have"`
+}
+
+// CompanionHave is one role already satisfied from disk, and by which file.
+type CompanionHave struct {
+	Role string `json:"role"`
+	Path string `json:"path"`
 }
 
 // PlanImageCompanions answers "what else does this DiT need, and from where",
@@ -126,8 +138,9 @@ func PlanImageCompanions(s Settings, meta Metadata, name string) (plan Companion
 	if !vid.is() && isFullCheckpointArch(arch) {
 		return CompanionPlan{}, false
 	}
-	_, missing := resolveComponents(s.Encoders, nil, arch, name, encoderPoolFor(s.RootList()), meta.CondHidden, vid)
+	comps, missing := resolveComponents(s.Encoders, nil, arch, name, encoderPoolFor(s.RootList()), meta.CondHidden, vid)
 	plan.Missing = append([]string{}, missing...)
+	plan.Have = comps.roles()
 	plan.Files = []CompanionFile{}
 	plan.Unsourced = []string{}
 	if len(missing) == 0 {

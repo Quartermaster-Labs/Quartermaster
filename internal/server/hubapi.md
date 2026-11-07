@@ -34,7 +34,10 @@ both), then `autogen.PlanImageCompanions(settings, meta, repo+"/"+path)`. The re
 as the name because several families are told apart only by name ("flux-3", "moss-image") and a
 bare quant filename often does not carry it.
 
-Response `{image, family, missing, companions[{role,label,source,repo,path,sizeBytes,state}], unsourced}`.
+Response `{image, family, missing, companions[{role,label,source,repo,path,sizeBytes,state}], unsourced, have[{role,path}]}`.
+`have` is the roles already satisfied from disk with the file each will be wired to
+(`resolveComponents`' resolved paths, via `CompanionPlan.Have`), so the box can show "needs nothing"
+as such instead of disappearing.
 `image:false` = not a split diffusion model (LLM, or an SD/SDXL full checkpoint): show nothing.
 Each companion is placed by `companionState`:
 
