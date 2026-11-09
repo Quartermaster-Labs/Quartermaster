@@ -18,6 +18,7 @@ import { get } from "svelte/store";
 import { isDarkMode } from "../stores/theme";
 import { sanitizeSvg } from "./svgSanitize";
 import { cssZoom } from "./uiZoom";
+import { fitDiagramSvg, icon, openDiagramViewer } from "./diagramViewer";
 // Types only: a value import here would defeat the lazy chunking below.
 import type { Chart as ChartJs, ChartConfiguration } from "chart.js";
 
@@ -114,11 +115,13 @@ async function renderMermaid(host: HTMLElement, src: string, dark: boolean) {
     await mermaid.parse(src);
     const { svg } = await mermaid.render(id, src, scratch);
     host.innerHTML = svg;
+    // Natural size, scaled down only (lib/diagramViewer.ts). This used to be a
+    // bare `max-width: 100%`, which overwrote the natural-width cap mermaid
+    // writes beside its `width="100%"` and stretched every diagram to the full
+    // message width: a narrow top-down flowchart came out several times life
+    // size.
     const el = host.querySelector("svg");
-    if (el) {
-      el.removeAttribute("height");
-      el.style.maxWidth = "100%";
-    }
+    if (el) fitDiagramSvg(el);
   } finally {
     // Takes mermaid's own scratch div with it, which is the belt and braces for
     // `suppressErrorRendering`: mermaid clears that div only on the two failure
@@ -296,12 +299,24 @@ function renderSvgBlock(
       console.error("copy failed", e);
     }
   });
-  tools.append(modes, copy);
-
   const out = document.createElement("div");
   out.className = "svg-out";
   out.innerHTML = clean;
   const svg = out.querySelector("svg");
+
+  const right = document.createElement("div");
+  right.className = "svg-tools-right";
+  if (svg) {
+    const expand = document.createElement("button");
+    expand.type = "button";
+    expand.className = "svg-copy-btn";
+    expand.title = "Expand";
+    expand.innerHTML = icon("expand", 14);
+    expand.addEventListener("click", () => openDiagramViewer(svg));
+    right.appendChild(expand);
+  }
+  right.appendChild(copy);
+  tools.append(modes, right);
   if (svg) {
     // Cap it to the bubble without distorting it: an SVG that declares a
     // viewBox and no size would otherwise lay out at the full width of the
@@ -473,7 +488,28 @@ export function diagramBlocks(node: HTMLElement) {
         pre.style.display = shown ? "none" : "";
         toggle.classList.toggle("open", !shown);
       });
-      fig.appendChild(toggle);
+      const actions = document.createElement("div");
+      actions.className = "diagram-actions";
+      actions.appendChild(toggle);
+      // Diagrams only: a chart is a canvas, already fitted to the card and
+      // interactive in place.
+      const svgEl = kind === "diagram" ? out.querySelector("svg") : null;
+      if (svgEl) {
+        const expand = document.createElement("button");
+        expand.type = "button";
+        expand.className = "diagram-src-btn diagram-expand-btn";
+        expand.innerHTML = `${icon("expand", 11)}<span>Expand</span>`;
+        expand.addEventListener("click", () => openDiagramViewer(svgEl));
+        actions.appendChild(expand);
+        out.classList.add("zoomable");
+        out.title = "Click to expand";
+        out.addEventListener("click", () => {
+          // Clicking the picture opens it, unless the click was the end of a
+          // text selection inside a label.
+          if (!window.getSelection()?.toString()) openDiagramViewer(svgEl);
+        });
+      }
+      fig.appendChild(actions);
       pre.style.display = "none";
       if (!placed) pre.before(fig);
     }

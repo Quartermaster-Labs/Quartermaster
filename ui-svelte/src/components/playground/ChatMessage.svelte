@@ -1585,8 +1585,28 @@
     flex: 0 0 auto;
   }
 
-  .prose :global(.diagram-src-btn) {
+  .prose :global(.diagram-block .diagram-out.zoomable) {
+    cursor: zoom-in;
+  }
+
+  .prose :global(.diagram-actions) {
+    display: flex;
+    gap: 0.375rem;
     margin-top: 0.5rem;
+  }
+
+  .prose :global(.diagram-expand-btn) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .prose :global(.svg-block .svg-tools-right) {
+    display: flex;
+    gap: 0.25rem;
+  }
+
+  .prose :global(.diagram-src-btn) {
     padding: 0.125rem 0.5rem;
     font-size: 0.6875rem;
     text-transform: uppercase;

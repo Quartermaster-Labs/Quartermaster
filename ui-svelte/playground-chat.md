@@ -368,6 +368,23 @@ unaffected) and runs `securityLevel: "strict"`; a render failure leaves the code
 a one-line note instead of swallowing the answer. Rendered blocks get a **Source** toggle that
 re-shows the fence.
 
+**Sizing (`lib/diagramViewer.ts` `fitDiagramSvg`).** Inline, a mermaid diagram is shown at its
+NATURAL size (its viewBox, the size mermaid laid it out at with real label metrics) and only ever
+scaled DOWN: to the message width, and toward a 480 px height budget, floored at 0.6x so labels stay
+readable (a very tall diagram is allowed to stay tall). Never scale up. Mermaid already writes
+`width="100%"` plus `max-width:<natural>px`; overwriting only the max-width with `100%` (what this
+used to do) stretched every diagram to the full message width, so a narrow top-down flowchart came
+out several times life size.
+
+**Expand viewer.** Clicking the picture or its Expand button opens a full-screen pan/zoom viewer
+(wheel or pinch zooms around the cursor, drag pans, `+`/`-`/`0` fit/`1` actual size, Esc closes).
+The same button sits on the ```svg card's toolbar. The SVG is **moved** into the viewer, with a
+same-size placeholder left behind, and put back on close. It is never cloned: mermaid's arrowheads
+are `url(#id)` markers and its CSS is `#id`-scoped, so a clone duplicates every id and markers
+resolve to whichever copy comes first. Pan/zoom math is in the stage's local px, dividing pointer
+deltas by `cssZoom` (the interface scale). The viewer's CSS is in `index.css` (`.qm-dv*`) because
+it mounts on `<body>`, outside the chat component's scope.
+
 `DEFAULT_DIAGRAM_PROMPT` (`lib/systemPrompt.ts`, `opts.diagrams`) is what tells the model it can
 draw — it is on for every chat turn, so **keep it byte-stable or the KV prefix breaks**.
 
