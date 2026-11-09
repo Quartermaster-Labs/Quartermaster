@@ -697,6 +697,81 @@
     @apply font-mono text-micro text-txtsecondary tabular-nums;
   }
 
+  /* Full-screen diagram viewer (lib/diagramViewer.ts). Built on <body> by plain
+     DOM code, so its styles live here and not in the chat component that opens
+     it. `inset: 0` on a fixed box needs no --qm-scale correction. */
+  .qm-dv {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: flex;
+    padding: 1.5rem;
+    background: rgba(0, 0, 0, 0.55);
+  }
+  .qm-dv-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    border-radius: 0.5rem;
+    border: 1px solid var(--color-card-border);
+    background: var(--color-surface);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  }
+  .qm-dv-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    min-height: 2.5rem;
+    padding: 0 0.5rem 0 0.75rem;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .qm-dv-hint {
+    font-size: 0.75rem;
+    color: var(--color-txtsecondary);
+  }
+  .qm-dv-btn,
+  .qm-dv-pct {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 1.75rem;
+    min-width: 1.75rem;
+    padding: 0 0.375rem;
+    border-radius: 0.25rem;
+    color: var(--color-txtsecondary);
+    background: transparent;
+    cursor: pointer;
+  }
+  .qm-dv-pct {
+    min-width: 3.5rem;
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .qm-dv-btn:hover,
+  .qm-dv-pct:hover {
+    background: var(--color-secondary);
+    color: var(--color-txtmain);
+  }
+  .qm-dv-stage {
+    position: relative;
+    flex: 1;
+    overflow: hidden;
+    cursor: grab;
+    touch-action: none;
+  }
+  .qm-dv-stage.dragging {
+    cursor: grabbing;
+  }
+  .qm-dv-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: 0 0;
+  }
+
   /* The app's one popup list, shared by Select (closed list) and Combobox (free
      text + suggestions). Global rather than scoped to either component so the
      two cannot drift into looking like different widgets; lib/popupPlace.ts is
