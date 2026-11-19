@@ -7,6 +7,7 @@ const ModelPreloadedEventID = 0x06
 const InFlightRequestsEventID = 0x07
 const LiveTokensEventID = 0x08
 const BackendMetricsEventID = 0x09
+const ModelStatusChangedEventID = 0x0A
 
 // ProcessStateChangeEvent is emitted whenever a process transitions between
 // lifecycle states. States are carried as strings so this package stays a leaf
@@ -70,4 +71,15 @@ type LiveTokensEvent struct {
 
 func (e LiveTokensEvent) Type() uint32 {
 	return LiveTokensEventID
+}
+
+// ModelStatusChangedEvent says a model's /api/models entry changed without a
+// lifecycle transition (a post-load check found its memory demoted, say), so
+// SSE listeners re-send the model list.
+type ModelStatusChangedEvent struct {
+	Model string
+}
+
+func (e ModelStatusChangedEvent) Type() uint32 {
+	return ModelStatusChangedEventID
 }

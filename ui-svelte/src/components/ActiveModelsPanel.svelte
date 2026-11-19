@@ -2,14 +2,15 @@
   import { tip } from "../lib/tooltip";
   import { get } from "svelte/store";
   import { slide } from "svelte/transition";
+  import { SvelteSet } from "svelte/reactivity";
   import { push } from "svelte-spa-router";
-  import { models, unloadSingleModel, getModelConfig, type ModelConfig } from "../stores/api";
+  import { models, unloadSingleModel, loadModel, getModelConfig, type ModelConfig } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
   import { playgroundPort } from "../stores/playgroundAuth";
   import { isNative } from "../lib/native";
   import { openTab } from "../stores/appTabs";
   import { prettifyModelName, modelCategory, modelWeightGB, playgroundTarget, type ModelCategory } from "../lib/modelUtils";
-  import { Settings, Square, Image, Film, MessageCircle, HelpCircle, ChevronRight, Copy, Check } from "lucide-svelte";
+  import { Settings, Square, Image, Film, MessageCircle, HelpCircle, ChevronRight, Copy, Check, AlertTriangle, RotateCw } from "lucide-svelte";
   import type { Model } from "../lib/types";
   import ModelConfigModal from "./ModelConfigModal.svelte";
   import InferenceFeedback from "./InferenceFeedback.svelte";
@@ -71,6 +72,22 @@
   const ordered = $derived(
     liveMembers.slice().sort((a, b) => modelWeightGB(b) - modelWeightGB(a) || a.id.localeCompare(b.id)),
   );
+  // Models mid-reload from the demotion warning. Unload blocks until the process
+  // is gone, so the load that follows is placed against the freed VRAM and the
+  // server's held-back amount (vramdemotion.go).
+  const reloading = new SvelteSet<string>();
+  async function reloadModel(id: string): Promise<void> {
+    reloading.add(id);
+    try {
+      await unloadSingleModel(id);
+      await loadModel(id);
+    } catch {
+      // Both helpers log; the card's state dot shows where it ended up.
+    } finally {
+      reloading.delete(id);
+    }
+  }
+
   let selId = $state("");
   const shown = $derived.by(() => {
     if (ordered.length <= 1) return ordered;
@@ -267,6 +284,29 @@
                  secondary colour, i.e. the three least readable settings at once
                  on the one string that identifies what's running. -->
             <div class="mt-1.5 font-mono text-base font-medium text-txtmain break-words" use:tip={m.id}>{display(m)}</div>
+
+            {#if m.demotedMB}
+              <!-- Windows parked part of this load in system memory although VRAM
+                   read free (server vramdemotion.go). Nothing else on the card
+                   shows it: the model answers, just several times slower once the
+                   context is long. The server already holds that much back for
+                   the next load, so a reload is the fix. -->
+              <div class="mt-2 flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-2 text-label text-txtmain">
+                <AlertTriangle size={14} class="shrink-0 mt-0.5 text-warning" />
+                <span class="flex-1">
+                  {(m.demotedMB / 1024).toFixed(1)} GB of this model loaded into system memory instead of VRAM, so long
+                  prompts will decode several times slower. Reloading places it with that much less VRAM.
+                </span>
+                <button
+                  class="btn btn--sm py-1 inline-flex items-center gap-1.5 shrink-0"
+                  onclick={() => reloadModel(m.id)}
+                  disabled={reloading.has(m.id)}
+                >
+                  <RotateCw size={12} class="shrink-0 {reloading.has(m.id) ? 'animate-spin' : ''}" />
+                  Reload
+                </button>
+              </div>
+            {/if}
 
             {#if cfg?.isImage}
               <div class="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 text-label">

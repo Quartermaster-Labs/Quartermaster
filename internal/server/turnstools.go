@@ -198,6 +198,26 @@ const (
 	nudgeThoughtMax = 6000
 )
 
+// Runaway tool loops. The per-tool caps stop a model that keeps making NEW
+// calls; these stop one that keeps making the SAME call, which the repeat
+// guard answers from cache, so no cap ever counts it. 2026-11-19: a 27B
+// counting 1200 log lines by hand ran past its thinking budget, then re-issued
+// one calculate call about a hundred times, a round a second, until the model
+// was unloaded.
+const (
+	// turnMaxDupRounds is how many rounds in a row may consist only of repeats.
+	// One is a slip the cached result's note usually corrects; a model that
+	// repeats again after reading that note is looping.
+	turnMaxDupRounds = 2
+	// turnMaxRounds bounds a turn that varies its calls. Above any legitimate
+	// use: the per-tool caps add up to fewer rounds than this.
+	turnMaxRounds = 64
+	// toolLoopNudge is appended when the tools are taken away.
+	toolLoopNudge = "Tools are now off for this turn: you have been repeating tool calls without making progress. Write your answer to the user from what you already have. If the task cannot be finished that way, say what is missing."
+	// toolLoopMarker ends a turn whose model called a tool even after that.
+	toolLoopMarker = "_(stopped: the model kept calling tools without answering)_"
+)
+
 var thinkTagStripper = strings.NewReplacer("<think>", "", "</think>", "")
 
 // noAnswerNudge builds the synthetic user turn that hands the model its own

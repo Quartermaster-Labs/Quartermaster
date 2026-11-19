@@ -196,7 +196,7 @@ inherited**). `requestedCtx` reads the size off the `?ctx=` suffix or `X-QM-Ctx`
 
 ## OOM / VRAM protection (fork)
 
-Four pieces, all surfaced through `/api/performance`:
+Five pieces, the first four surfaced through `/api/performance`:
 
 - **Foreign VRAM** — `foreignGPU`/`foreignVram`/`isInferenceProc` (`apigroup.go`) tally GPU memory
   held by `llama-server`/`sd-server` processes this instance did NOT spawn
@@ -229,6 +229,25 @@ Four pieces, all surfaced through `/api/performance`:
   planned at 22.2 GB but holding 20.1 GB while 2.3 GB of the card sat free. Two further brakes:
   shedding needs the overshoot to clear `vramGuardShedSlackGB`, and after a shed the guard sits out
   `cooldown()` (2× grace, ≥1 min) before shedding again.
+
+- **Demotion check** (`vramdemotion.go`). A load can pass the spawn guard and still not land in
+  VRAM: on Windows, an allocation past what WDDM keeps resident does not fail, it is placed in system
+  memory and stays there, so the model answers but decodes several times slower at long context
+  (2026-11-19: 4.75 t/s at 64k instead of ~55, 1.8 GB of llama-server in system RAM while the
+  adapter read 3 GB free). **No pre-load number predicts it**: free VRAM read 20.6 GB against a
+  19.5 GB estimate, and DXGI's per-process `Budget` is a near-fixed ~91% slice of the card that does
+  not net out other processes (measured 22.3 GB with 19.8 GB already held). So the spawn hook
+  records the estimate it placed against (`autogen.LiveOffloadPlan`), and 2 s after the process's
+  FIRST GENERATING REQUEST (first streamed token or first completed request, whichever comes first)
+  its own PDH counters (`perf.ProcessGpuMemory`) are compared with it. Not at `ready`: with
+  `--no-warmup` the graph has not run yet and ~0.75 GB of the 27B is uncommitted (19032 MB at
+  ready+3 s, 19789 MB after a 16-token reply), which read as a false 0.8 GB demotion. Demoted =
+  `min(estimate - dedicated, shared)`: the shortfall alone over-reports when the estimate is high
+  (mmproj priced at max image size), shared alone over-reports pinned host buffers (0.9 GB is normal
+  on the 27B). ≥512 MB is logged as a warning, shown on the model's card as `demotedMB` with a
+  Reload button, and held back from free VRAM on that model's next placement, cumulatively. The
+  penalty retires itself once the raw free reading rises by its size (whatever pinned the hidden
+  VRAM left), and a restart forgets it. Windows only; `ProcessGpuMemory` is `ok=false` elsewhere.
 
 ## Reasoning effort: advertised, then translated (fork)
 

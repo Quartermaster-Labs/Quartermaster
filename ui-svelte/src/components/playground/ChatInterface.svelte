@@ -48,7 +48,7 @@
   import { ALWAYS_TOOLS, EXTRA_TOOLS } from "../../lib/assistantTools";
   import { MEMORY_TOOLS, memoryBlock } from "../../lib/memoryTools";
   import { playgroundStores } from "../../stores/playgroundActivity";
-  import { getTextContent, getImageUrls } from "../../lib/types";
+  import { getTextContent, getImageUrls, forModel } from "../../lib/types";
   import { buildBasePrompt } from "../../lib/systemPrompt";
   import type { ChatMessage, ContentPart } from "../../lib/types";
   import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Wrench, Reply, Quote, ShoppingCart, CloudSun, BrainCircuit, FileText, Loader2, AlertTriangle, SlidersHorizontal } from "lucide-svelte";
@@ -359,6 +359,9 @@
   // call only produces a search card once it FINISHES, so this is the only signal
   // during the seconds it runs. Server-driven: the turn loop owns the tools.
   let busyLabel = $state("");
+  // Prompt-processing progress from the server's `prefill` delta (llama-server's
+  // prompt_progress). Null when nothing is being prefilled.
+  let prefill = $state<{ done: number; total: number } | null>(null);
   let isSearching = $derived(busyLabel !== "");
   let reasoningStartTime = $state<number>(0);
   let abortController = $state<AbortController | null>(null);
@@ -943,6 +946,7 @@
     answerDone = false;
     isReasoning = false;
     busyLabel = "";
+    prefill = null;
     reasoningStartTime = 0;
     abortController = new AbortController();
     const signal = abortController.signal;
@@ -965,7 +969,9 @@
     const base: ChatMessage[] = [];
     if (sys) base.push({ role: "system", content: sys });
     // History up to (not incl.) the live assistant bubble.
-    const history = sessionById(id)!.messages.slice(curCompacted, -1);
+    // forModel: a message the server read in parts goes out as its digest, the
+    // exact bytes the model saw last turn, so the KV prefix still matches.
+    const history = sessionById(id)!.messages.slice(curCompacted, -1).map(forModel);
     if (isRewrite && history.length > 0) {
       // Swap the final user message (bare prose) for the augmented instruction so
       // the model gets the explicit "transform this exact text" framing, while all
@@ -1012,6 +1018,10 @@
           maxSearches: shoppingPrefs !== false ? Math.max($searchMaxPerTurnStore, SHOPPING_MIN_SEARCHES) : $searchMaxPerTurnStore,
           throttleMs: $searchThrottleMsStore,
           dedupe: $searchDedupeStore,
+          // A newest message that would push the prompt past the compaction
+          // threshold is read in parts server-side (turnsdigest.go). Off for a
+          // rewrite: its "message" is the text to transform, not material to note.
+          digestAt: isRewrite ? undefined : COMPACT_AT,
         }),
         signal,
       });
@@ -1069,6 +1079,7 @@
       answerDone = false;
       isReasoning = false;
       busyLabel = "";
+      prefill = null;
       abortController = null;
     }
 
@@ -1187,6 +1198,10 @@
         // "" = nothing running; the label is shown verbatim.
         busyLabel = d.text || "";
         break;
+      case "prefill":
+        // total 0 = prefill over (first token, or the round ended).
+        prefill = d.total > 0 ? { done: d.done || 0, total: d.total } : null;
+        break;
       case "approval":
         // A qm config change awaiting accept/deny (or its resolved outcome).
         // Lives on the bubble only for the turn; the post-turn sync drops it.
@@ -1196,11 +1211,13 @@
         // Prose is final; the stream stays open for the `titles` snapshot and
         // `done`. Carries genMs so the footer's timing is right immediately.
         busyLabel = "";
+        prefill = null;
         answerDone = true;
         if (d.genMs) patchLast(id, (m) => (m.role === "assistant" ? { ...m, genTimeMs: d.genMs } : m));
         break;
       case "done":
         busyLabel = "";
+        prefill = null;
         answerDone = true;
         if (d.genMs) patchLast(id, (m) => (m.role === "assistant" ? { ...m, genTimeMs: d.genMs } : m));
         break;
@@ -1242,6 +1259,7 @@
     answerDone = false;
     isReasoning = false;
     busyLabel = "";
+    prefill = null;
     reasoningStartTime = 0;
     abortController = new AbortController();
     const signal = abortController.signal;
@@ -1260,6 +1278,7 @@
       answerDone = false;
       isReasoning = false;
       busyLabel = "";
+      prefill = null;
       abortController = null;
     }
   }
@@ -1270,7 +1289,7 @@
     const session = sessionById(id);
     if (!session || session.titled) return;
     if (!session.messages.some((m) => m.role === "assistant" && typeof m.content === "string" && m.content.trim())) return;
-    const title = await generateTitle(modelId, session.messages as ChatMessage[], signal);
+    const title = await generateTitle(modelId, (session.messages as ChatMessage[]).map(forModel), signal);
     // The user may have renamed the chat while the model was thinking.
     if (!title || sessionById(id)?.titled) return;
     patchSession(id, { title, titled: true }); // no bump — a late title shouldn't reorder
@@ -1348,7 +1367,7 @@
     const { sys, turnTools } = turnSetup(id, modelId, false, summary);
     const messages: ChatMessage[] = [];
     if (sys) messages.push({ role: "system", content: sys });
-    messages.push(...(s.messages.slice(curCompacted) as ChatMessage[]));
+    messages.push(...(s.messages.slice(curCompacted) as ChatMessage[]).map(forModel));
     // `?.`: a tail with no user message in it snaps the boundary to the end.
     messages.push({ role: "user", content: compactInPlacePrompt(!!summary, getTextContent(s.messages[boundary]?.content ?? "")) });
     try {
@@ -1362,7 +1381,7 @@
       if (e instanceof Error && e.name === "AbortError") throw e;
       console.warn("in-place compaction failed, falling back:", e);
       // Summarize only the newly-folded slice; `summary` already covers the prefix.
-      const text = await summarizeConversation(modelId, s.messages.slice(curCompacted, boundary) as ChatMessage[], summary, signal);
+      const text = await summarizeConversation(modelId, (s.messages.slice(curCompacted, boundary) as ChatMessage[]).map(forModel), summary, signal);
       return { text, heldTokens: 0, heldChars: 0 };
     }
   }
@@ -1373,7 +1392,7 @@
   function textChars(messages: ChatMessage[]): number {
     let n = 0;
     for (const m of messages) {
-      n += getTextContent(m.content ?? "").length;
+      n += getTextContent(forModel(m).content ?? "").length;
       if (m.tool_calls?.length) n += JSON.stringify(m.tool_calls).length;
     }
     return n;
@@ -1430,7 +1449,12 @@
     }
     // Update the user message at the specified index
     patchSession(id, {
-      messages: sessionById(id)!.messages.map((msg, i) => (i === idx ? { ...msg, content } : msg)),
+      // The digest described the OLD text: drop it so the edit is read afresh.
+      messages: sessionById(id)!.messages.map((msg, i) => {
+        if (i !== idx) return msg;
+        const { digest: _d, digestInfo: _di, ...rest } = msg;
+        return { ...rest, content };
+      }),
     });
     // Trigger a new chat request with the updated messages
     await regenerateFromIndex(id, idx);
@@ -1858,10 +1882,12 @@
             onApprove={respondApproval}
             rewriteInstruction={message.rewriteInstruction}
             rewriteOriginal={message.rewriteOriginal}
+            digestInfo={message.role === "user" ? message.digestInfo : undefined}
             isStreaming={genId === $activeChatId && !answerDone && idx === messages.length - 1 && message.role === "assistant"}
             isReasoning={isReasoning && genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant"}
             isSearching={isSearching && genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant"}
             {busyLabel}
+            prefillPct={prefill && genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant" ? Math.min(100, Math.floor((prefill.done * 100) / prefill.total)) : -1}
             modelReady={modelReady}
             hasVisionInput={message.role === "assistant" && idx > 0 && getImageUrls(messages[idx - 1].content).length > 0}
             onEdit={message.role === "user" && message.rewriteInstruction == null ? (newContent, images) => editMessage(idx, newContent, images) : undefined}

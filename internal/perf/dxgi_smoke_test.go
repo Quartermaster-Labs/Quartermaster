@@ -2,7 +2,10 @@
 
 package perf
 
-import "testing"
+import (
+	"testing"
+	"unsafe"
+)
 
 func TestDxgiSmoke(t *testing.T) {
 	adapters, err := openDxgiAdapters()
@@ -36,6 +39,14 @@ func TestDxgiSmoke(t *testing.T) {
 		a := &adapters[i]
 		t.Logf("gpu[%d] name=%q totalMB=%d usedMB=%d sharedMB=%d sharedUsedMB=%d mirrors=%d",
 			i, a.name, a.totalMB, a.usedMB(mem), a.sharedMB, a.sharedUsedMB(shared, true), len(a.ptrs))
+		for j, p := range a.ptrs {
+			var info dxgiQueryVideoMemoryInfo
+			if comCall(p, 14, 0, 0, uintptr(unsafe.Pointer(&info))) != 0 {
+				continue
+			}
+			t.Logf("  mirror[%d] local budget=%dMB currentUsage=%dMB availForReservation=%dMB",
+				j, info.Budget>>20, info.CurrentUsage>>20, info.AvailableForReservation>>20)
+		}
 	}
 }
 
@@ -67,5 +78,15 @@ func TestDxgiSharedUsedMB_FailsClosed(t *testing.T) {
 	// Mirrors: usage can land on any one of them, so the busiest wins.
 	if got := a.sharedUsedMB(map[LUID]float64{l0: 128 * mib, l1: 4096 * mib}, true); got != 4096 {
 		t.Errorf("got %d MB, want the max across mirror LUIDs (4096)", got)
+	}
+}
+
+// ProcessGpuMemory must find a process by its pid in the PDH instance name. The
+// test process itself holds no GPU memory, so a running llama-server is used
+// when there is one; otherwise this only checks the call is harmless.
+func TestProcessGpuMemory_Smoke(t *testing.T) {
+	for _, p := range computeAppsPlatform(t.Context()) {
+		d, s, ok := ProcessGpuMemory(p.PID)
+		t.Logf("pid %d %q: dedicated=%dMB shared=%dMB ok=%v (computeapps says %dMB)", p.PID, p.Name, d, s, ok, p.MemMB)
 	}
 }

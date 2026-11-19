@@ -81,6 +81,11 @@ type apiModel struct {
 	// edit (new args apply on next load) or a spawn-time offload rewrite, so the
 	// UI shows what the model is REALLY loaded with, not the pending config.
 	RunningCmd string `json:"runningCmd,omitempty"`
+	// DemotedMB is how much of the RUNNING process Windows placed in system memory
+	// instead of VRAM at load (vramdemotion.go). 0 = none detected or not checked.
+	// A demoted model decodes several times slower at long context, so the UI
+	// says so and offers a reload, which is placed with that much less VRAM.
+	DemotedMB int `json:"demotedMB,omitempty"`
 	// PromptEnhancer is the rewrite model this IMAGE model hands its prompt to
 	// before rendering, already joined to its system prompt. nil for every model
 	// that has not opted in, which is all of them by default. The playground
@@ -295,17 +300,7 @@ func (s *Server) modelStatus() []apiModel {
 				capsMap["decision_backend_outdated"] = true
 			}
 		}
-		ctxSize := 0
-		if v, ok := info.Value("-c", "--ctx-size"); ok {
-			ctxSize, _ = strconv.Atoi(strings.TrimSpace(v))
-		}
-		slots := 0
-		if v, ok := info.Value("-np", "--parallel"); ok {
-			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 1 {
-				slots = n
-				ctxSize /= n // -c is the shared pool; report the per-conversation share
-			}
-		}
+		ctxSize, slots := perSlotCtx(info)
 		family := modelGguf(mc)
 		quantName, quantLabel, modelKey, familyKey := modelKeys(family, id)
 		modelKey = engineScopedKey(modelKey, mc)
@@ -334,6 +329,7 @@ func (s *Server) modelStatus() []apiModel {
 			EstVramGB:          mc.EstVramGB,
 			EstRamGB:           mc.EstRamGB,
 			RunningCmd:         runningCmd,
+			DemotedMB:          s.demotion.liveMB(id),
 		})
 	}
 
@@ -700,6 +696,7 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 
 	defer event.On(func(e shared.ProcessStateChangeEvent) { sendModels() })()
 	defer event.On(func(e shared.ConfigFileChangedEvent) { sendModels() })()
+	defer event.On(func(e shared.ModelStatusChangedEvent) { sendModels() })()
 	defer event.On(func(e shared.LiveTokensEvent) { sendLiveTokens(e) })()
 
 	// A playground caller subscribes to model status only. It reaches this route
@@ -742,4 +739,66 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// perSlotCtx is the context window ONE conversation gets under a launch
+// command, and the slot count when it serves more than one (0 otherwise):
+// -c is the pool all -np slots share, so the raw -c would promise N times the
+// context any single chat can hold.
+func perSlotCtx(info *config.CmdInfo) (ctx, slots int) {
+	if v, ok := info.Value("-c", "--ctx-size"); ok {
+		ctx, _ = strconv.Atoi(strings.TrimSpace(v))
+	}
+	if v, ok := info.Value("-np", "--parallel"); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 1 {
+			slots = n
+			ctx /= n
+		}
+	}
+	return ctx, slots
+}
+
+// slotsFull reports whether model has at least as many requests in flight as
+// its llama-server has slots (-np / --parallel), so one more would queue inside
+// the process. A command without the flag answers false: llama-server's own
+// default is not 1, and a non-llama backend batches requests, so an unknown
+// slot count is never reported as full.
+func (s *Server) slotsFull(model string) bool {
+	cfg := s.config()
+	id, ok := cfg.RealModelName(model)
+	if !ok {
+		return false
+	}
+	cmd := cfg.Models[id].Cmd
+	if running, ok := s.local.LaunchedCmd(id); ok && running != "" {
+		cmd = running
+	}
+	v, ok := config.ParseCmd(cmd).Value("-np", "--parallel")
+	if !ok {
+		return false
+	}
+	slots, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || slots < 1 {
+		return false
+	}
+	n, ok := s.local.Inflight(id)
+	// n counts the asking request itself, so "full" is more than slots.
+	return ok && n > int64(slots)
+}
+
+// conversationCtx is perSlotCtx for a model id, read off the command the model
+// is RUNNING under when it is up (a live edit or offload rewrite can differ from
+// the config), else the configured one. 0 = unknown model or no -c flag.
+func (s *Server) conversationCtx(model string) int {
+	cfg := s.config()
+	id, ok := cfg.RealModelName(model)
+	if !ok {
+		return 0
+	}
+	cmd := cfg.Models[id].Cmd
+	if running, ok := s.local.LaunchedCmd(id); ok && running != "" {
+		cmd = running
+	}
+	ctx, _ := perSlotCtx(config.ParseCmd(cmd))
+	return ctx
 }

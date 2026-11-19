@@ -55,6 +55,12 @@ API key injected. See `turns_design.md` for the full design.
 - **Repeat tool calls are deduped per turn** (`doneCalls`, keyed name+args): the second identical
   call gets the first result back with a note, re-executes nothing and paints no second card — weak
   models re-issue the same channel listing round after round.
+- **A turn that only repeats stops calling tools.** The repeat guard re-executes nothing, so no
+  per-tool cap ever counts a repeat, and a model that ignores the note loops forever (2026-11-19:
+  one `calculate` call about a hundred times, a round a second, until the model was unloaded).
+  After `turnMaxDupRounds` (2) rounds in a row made only of repeats, or `turnMaxRounds` (64)
+  rounds of any kind, the runner appends `toolLoopNudge` at the tail (KV prefix kept) and sends
+  `tool_choice: "none"`. A model that calls a tool anyway ends the turn with `toolLoopMarker`.
 - Search-card `kind` distinguishes the three YouTube tools (`youtube` = transcript,
   `youtube-search`, `youtube-comments`), because one shared kind labelled a metadata listing as if
   the video had been watched.
@@ -66,6 +72,15 @@ API key injected. See `turns_design.md` for the full design.
   after, and **replayed in `subscribe()`'s snapshot** so a reattaching tab does not sit on a stale
   or missing status. Instant local tools (time, math, units) get `""`: a label that flickers for
   3 ms is noise.
+- A **`prefill` delta** (`done`, `total`) is prompt-processing progress, shown as a percentage beside
+  the label ("Processing prompt 46%", or after the digest label). Streamed rounds ask for
+  `return_progress`; llama-server answers with one token-less data frame per batch carrying
+  `prompt_progress {total, cache, processed}`, and `readSSE` reports `processed-cache` of
+  `total-cache`. **That frame must not count as the first token**: it arrives as prefill STARTS, and
+  treating it as data would clear the digest label before any of the prompt it names was read.
+  Shown only from 2048 new tokens (`prefillShowTokens`), deduped to whole percent, cleared at the
+  first token and at round end, and replayed in the snapshot like `busy`. Digest parts are
+  non-streamed calls, so they show the part label only.
 
 ### Reasoning-box titles
 
@@ -126,6 +141,15 @@ up alone (the UI says "Loading model…" from its own residency signal, but only
 text yet — on a later round the digest label below is the one to keep). The first `data:` frame
 clears the label unconditionally: a token ends every wait, and every prefill, by definition.
 
+The router only narrates a wait it can see. A model that is already loaded passes it at once, and if
+every llama-server slot is busy (`--parallel 1`: another user's turn, a digest, an API client) the
+request then queues INSIDE llama-server, silently, for as long as the other request takes. A round
+that asked for `return_progress` covers that: llama-server sends its first `prompt_progress` frame
+the moment a slot takes the request, so `watchQueue` raises the same "Waiting its turn" when no byte
+has arrived after `queueLabelDelay` (1.5 s) and `Server.slotsFull` says the model has more requests
+in flight than `-np` slots. The first byte ends the watch. A command without `-np` is never "full"
+(llama-server's default is not 1, and other backends batch).
+
 ### The digest label ("Reading through the page")
 
 A tool's label comes down the moment the tool returns, but the model then has to **prefill** what it
@@ -134,6 +158,68 @@ itself sitting inside a collapsed reasoning trail. So a round whose tool produce
 `digestMinChars` (1500) of text raises `digestLabel(name)` ("Reading through the page / the
 transcript / the results") for the length of that prefill, cleared by the next round's first token.
 Short results (a date, an FX rate) get none: a label that flashes on and off reads as a glitch.
+
+## `turnsdigest.go`: a message too long for the window
+
+Not to be confused with the digest LABEL above. A pasted wall of text or an attached book can be
+longer than the model's context, and compaction cannot help: it folds OLD turns and always keeps
+the newest message verbatim. So before round 1, `run` calls `digestOversize`, which rewrites only
+the last user message, and only when the turn opted in (`turnStart.DigestAt`, the client's
+`COMPACT_AT`; a rewrite turn sends none) and the prompt would pass `DigestAt` of the window.
+
+- **The window is resolved server-side** (`Server.conversationCtx`, `apigroup.go`): the per-slot
+  `-c` off the command the model is RUNNING under, else the configured one. `perSlotCtx` is shared
+  with `/v1/models`, so the catalog and the digest cannot disagree. Never taken from the body.
+- **Task first.** One cheap call sees the first and last ~2k tokens and answers
+  `<task>...</task>` or `<task>NONE</task>`. Every part is then read FOR that request, because a
+  blind summary keeps the gist and drops the one line the question was about. Each part's prompt
+  also asks the model to copy out any request it meets, which catches one buried mid-text; those
+  are used only when the probe found none. The probe also sees the conversation BEFORE the message
+  (`priorTurns`: up to ~2k tokens, newest first, each turn cut to its start and end, no reasoning
+  or tool messages), because "I'll paste my book, summarise it" usually comes a turn before a
+  message that is only the book. Without it that book got `NONE`, every note was written blind
+  ("preserve every fact"), and each came out as a ~38% retelling of its part that no note size
+  could hold.
+- **Map, then reduce.** Parts (`splitChunks`: paragraph > line > sentence > space, UTF-8 safe)
+  are ~45% of the window each and read independently. Only if the notes together overflow are
+  neighbours merged, at most `digestMaxReduce` (3) times. Rolling refine ("summary so far + next
+  part") was rejected: it re-summarizes part 1 once per part.
+- **Note size comes from the room, not a constant** (`noteTarget`, `noteMaxTokens`). Each note is
+  asked for two thirds of an even share of the free room, capped at a sixth of its part
+  (`digestMinCompression`), floored at 256. `max_tokens` is the target plus half again, because
+  models overrun a stated length and a note cut at `max_tokens` loses its END, which is the end of
+  its part. A flat 3000-token cap did exactly that to a 4-part book on a 151k window: 12k of ~115k
+  tokens of room used, every note cut, and the answer listed the chapters it never saw. The cost is
+  decode time: three notes near 11k each is ~12.5 minutes of decode at ~45 t/s, against ~4.5 before.
+- **A cut note is continued, not lost** (`digestMaxContinues`, `continueNotes`). A part note that
+  ends on `finish_reason: length` is asked for the rest: same part, then the notes so far, "continue
+  from where they stop". The part leads both prompts, so its KV is reused and the extra prefill is
+  only the notes; re-reading the part in halves would throw the first note's decode away. Every
+  part prompt also carries `digestPacing` ("cover the whole part evenly"): a note is written front
+  to back with no sense of its remaining room, and one spent 59% of itself on the first 44% of its
+  part.
+- **The ending stays verbatim** (`tailCut`, up to 4k tokens): the likeliest place for the
+  question, and paraphrasing the question is the worst loss there is.
+- **Tokens are estimated from bytes**, starting at 3.5 bytes/token and recalibrated from the
+  probe's `usage.prompt_tokens`. Inlined images count a flat 1024 tokens, never their base64
+  bytes. A part that still overflows is halved and retried (`digestMaxSplits`).
+- **Overflow fallback.** If the estimate said "fits" and llama-server refuses anyway
+  (`exceed_context_size_error`, which comes before any prefill, so the miss is free), `run`
+  digests with `force` and llama-server's exact `n_prompt_tokens`, then retries once. Only while
+  the turn is `pristine()`: an overflow after a tool round is caused by the tool results, and
+  rerunning would repeat the searches.
+- **Calls** are non-streamed, thinking off, temperature 0.2, under
+  `X-Conversation-Id: <chat>#digest`, so the parts share a KV prefix (one system prompt for all)
+  without being mistaken for the chat. The cost is one slot-cache switch away from the chat and
+  back. They send `X-QM-Hold-Ms`, which `selfCompletionRequest` omits for a tool-less body, so the
+  model is not swapped out between part 3 and part 4.
+- **Persisted** on the user message in chats.json as `digest` (the exact replacement text) and
+  `digestInfo {parts, tokens, task}`. The client sends `digest` in place of the content from then
+  on (`forModel`), byte for byte, so the next turn reuses the KV instead of reading the text
+  again. Editing the message drops both fields.
+- **Refusals carry numbers**: over `digestMaxParts` (64) parts, a context too small to hold a
+  part, a history that already fills the window (compact first), or notes that still overflow
+  after the merges.
 
 ## `titlegen.go` — the title model
 
