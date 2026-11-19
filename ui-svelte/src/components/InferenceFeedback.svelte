@@ -11,6 +11,7 @@
 </script>
 
 <script lang="ts">
+  import { untrack } from "svelte";
   import { tip } from "../lib/tooltip";
   import { inFlightRequests, metrics, liveTokens, upstreamLogs, backendMetrics } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
@@ -162,48 +163,71 @@
     return ((lt.output_tokens - 1) / decodeMs) * 1000;
   });
 
-  // ---- Prompt-processing progress ----
-  // Prefill is the one generation phase with a determinate progress signal:
-  // llama-server logs "...prompt processing... progress = 0.46..." to stderr as it
-  // chews through the prompt (captured into upstreamLogs). Decode (token streaming)
-  // has no such signal. Parse the latest value from the log tail and surface it in
-  // the header while prefilling; -1 => unknown/indeterminate.
-  const PROMPT_PROGRESS_RE = /progress\s*=\s*([01](?:\.\d+)?)/g;
-  let promptProgress = $state(-1);
-  let prevBusyForProg = false;
+  // ---- Phase and rates from llama-server's own timing lines ----
+  // llama-server logs a timing line for the running task every ~2-3 s, in BOTH
+  // phases (captured into upstreamLogs):
+  //   prefill: "task 1857 | prompt processing, n_tokens = 22902, progress = 0.35, t = 24.42 s / 937.78 tokens per second"
+  //   decode:  "task 1857 | n_gen = 1150, tg = 47.53 t/s, tg_3s = 52.13 t/s"
+  // This is the only live signal a NON-streamed request gives (the playground's
+  // digest notes, most API clients): liveTokens stays empty for those, so without
+  // it the box sat on "prompt 100%" through minutes of generation, every readout "-".
+  // It is also the only live prefill rate: /metrics averages finished requests.
+  const TIMING_RE =
+    /task\s+(\d+)\s*\|\s*(?:prompt processing, n_tokens\s*=\s*(\d+), progress\s*=\s*([\d.]+), t\s*=\s*([\d.]+)\s*s\s*\/\s*([\d.]+) tokens per second|n_gen\s*=\s*(\d+), tg\s*=\s*([\d.]+) t\/s)/g;
+  type Timing = {
+    task: number;
+    phase: "prefill" | "decode";
+    prompt: { tokens: number; progress: number; ms: number; tps: number } | null;
+    gen: { tokens: number; tps: number } | null;
+  };
+  let timing = $state<Timing | null>(null);
+  // The newest timing line when this active window began. It belongs to an
+  // earlier request, so nothing is shown until a different line arrives.
+  let staleLine: string | null = null;
+  let prevBusyForTiming = false;
   $effect(() => {
     const logs = $upstreamLogs; // tracked: re-run as new log lines stream in
-    const decoding = ($liveTokens?.output_tokens ?? 0) > 0; // first token => prefill done
     if (!busy) {
-      promptProgress = -1;
-      prevBusyForProg = false;
+      timing = null;
+      prevBusyForTiming = false;
       return;
     }
-    if (!prevBusyForProg) {
-      promptProgress = -1; // new active window: drop any stale value until a fresh line lands
-      prevBusyForProg = true;
+    const matches = [...logs.slice(-24000).matchAll(TIMING_RE)];
+    const newest = matches.length ? matches[matches.length - 1] : null;
+    if (!prevBusyForTiming) {
+      prevBusyForTiming = true;
+      staleLine = newest?.[0] ?? null;
+      timing = null;
     }
-    if (decoding) {
-      promptProgress = -1; // no determinate progress once tokens are flowing
-      return;
+    if (!newest || newest[0] === staleLine) return;
+    staleLine = null;
+    const task = Number(newest[1]);
+    // A long decode scrolls the task's prompt lines out of the window: keep what
+    // was read while they were still in it.
+    // untrack: this effect writes timing, and must not re-run on its own write.
+    const prev = untrack(() => timing);
+    let prompt = prev?.task === task ? prev.prompt : null;
+    let gen: Timing["gen"] = null;
+    for (const m of matches) {
+      if (Number(m[1]) !== task) continue;
+      if (m[2] !== undefined) {
+        prompt = { tokens: Number(m[2]), progress: Number(m[3]), ms: Number(m[4]) * 1000, tps: Number(m[5]) };
+      } else {
+        gen = { tokens: Number(m[6]), tps: Number(m[7]) };
+      }
     }
-    const tail = logs.slice(-4000);
-    const matches = tail.match(PROMPT_PROGRESS_RE);
-    if (matches && matches.length) {
-      const v = parseFloat(matches[matches.length - 1].split("=")[1]);
-      if (!Number.isNaN(v)) promptProgress = v;
-    }
+    timing = { task, phase: newest[2] !== undefined ? "prefill" : "decode", prompt, gen };
   });
+  // Determinate prefill progress for the header and the fire; -1 => none.
+  const promptProgress = $derived(
+    busy && timing?.phase === "prefill" && ($liveTokens?.output_tokens ?? 0) === 0 ? (timing.prompt?.progress ?? -1) : -1,
+  );
 
-  // Unified stat readout: always show all six values. While generating, the
-  // metrics we can observe live (gen rate, output tokens, duration) are pulled
-  // from the live stream and rendered in the accent colour; everything else
-  // falls back to the last completed request. Idle => all from `last`, neutral.
-  // The six stats are fixed and always rendered — only their values and colour
-  // change. The three we can observe mid-stream (Gen rate, Duration, Out) glow
-  // accent and update live; the rest we can't see until completion, so they show
-  // "-" while generating (never a stale value from the previous request) and the
-  // final figure once idle. Idle => all neutral, all from the last request.
+  // Unified stat readout: the six stats are fixed and always rendered, only
+  // their values and colour change. While busy, each reads live (the token
+  // stream, else llama-server's timing lines) and glows accent; one not known yet
+  // shows "-", never a stale value from the previous request. Idle => all
+  // neutral, all from the last completed request.
   // Time-to-first-token: live = the measured TTFT pushed once the first token
   // lands; final = the backend's prompt-eval time (prefill finishes right before
   // the first token, so it's the accurate TTFT). -1 => not yet known.
@@ -221,23 +245,34 @@
     const [v, u] = fmtDur(ms).match(/^([\d.]+)(\D+)$/)!.slice(1);
     return { value: v, unit: u };
   }
+  // Live figures: the streamed counts where there are any, else the timing lines.
+  // The timing line's tg is decode-only like liveTps; its prefill t is the
+  // prompt's processing time, which is all of TTFT but the queue wait.
+  const liveOut = $derived(($liveTokens?.output_tokens ?? 0) || (timing?.gen?.tokens ?? 0));
+  const liveGenTps = $derived(liveTps || (timing?.gen?.tps ?? 0));
   const stats = $derived.by(() => {
-    const lt = $liveTokens;
     const t = last?.tokens;
+    const tp = timing?.prompt;
     return {
       // The three the operator watches: decode rate (the hero), TTFT, prefill rate.
-      gen: speed(busy ? liveTps : (t?.tokens_per_second ?? -1)),
-      ttft: busy ? dur(liveTtftMs) : t ? dur(t.time_to_first_ms) : NONE,
-      prompt: speed(busy ? (activeBackend?.prompt_tokens_seconds ?? -1) : (t?.prompt_per_second ?? -1)),
+      gen: speed(busy ? liveGenTps : (t?.tokens_per_second ?? -1)),
+      ttft: busy ? (liveTtftMs >= 0 ? dur(liveTtftMs) : decoding && tp ? dur(Math.round(tp.ms)) : NONE) : t ? dur(t.time_to_first_ms) : NONE,
+      prompt: speed(busy ? (tp?.tps ?? activeBackend?.prompt_tokens_seconds ?? -1) : (t?.prompt_per_second ?? -1)),
       duration: busy ? (elapsedMs > 0 ? fmtDur(elapsedMs) : "-") : last ? fmtDur(last.duration_ms) : "-",
-      input: busy ? (activeBackend?.prompt_tokens ? activeBackend.prompt_tokens.toLocaleString() : "-") : (t?.input_tokens ?? 0).toLocaleString(),
-      output: (busy ? (lt?.output_tokens ?? 0) : (t?.output_tokens ?? 0)).toLocaleString(),
+      input: busy
+        ? tp
+          ? tp.tokens.toLocaleString()
+          : activeBackend?.prompt_tokens
+            ? activeBackend.prompt_tokens.toLocaleString()
+            : "-"
+        : (t?.input_tokens ?? 0).toLocaleString(),
+      output: (busy ? liveOut : (t?.output_tokens ?? 0)).toLocaleString(),
     };
   });
 
-  // What the fire is doing. Prefill ends at the first token, which is also where
-  // the determinate prompt progress stops being reported.
-  const decoding = $derived(($liveTokens?.output_tokens ?? 0) > 0);
+  // What the fire is doing. Prefill ends at the first token (streamed) or at the
+  // first decode timing line (not streamed).
+  const decoding = $derived(($liveTokens?.output_tokens ?? 0) > 0 || timing?.phase === "decode");
   const fireMode = $derived<FireMode>(loading ? "loading" : !busy ? "idle" : decoding ? "generating" : "prefill");
   const fireProgress = $derived(loading ? (loadPct >= 0 ? loadPct / 100 : -1) : promptProgress);
 
@@ -274,7 +309,10 @@
   }
 
   // Header status + animated ellipsis (0–3 dots, 450ms/step) for active states.
-  const statusText = $derived(loading ? "Loading" : busy ? "Inferencing" : "Idle");
+  // "Inferencing" only until the first timing line or token says which phase.
+  const statusText = $derived(
+    loading ? "Loading" : !busy ? "Idle" : decoding ? "Generating" : timing?.phase === "prefill" ? "Processing prompt" : "Inferencing",
+  );
   const dots = $derived(".".repeat(Math.floor(phase / 2) % 4));
 
   // Promote the unit once the count would hit triple digits: ms -> s -> m -> h,
@@ -320,7 +358,7 @@
 
   <!-- The fire (lib/fireField.ts): takes whatever height the band has left, so
        the numbers below stay put and the animation absorbs the slack. -->
-  <FireField mode={fireMode} progress={fireProgress} tps={liveTps} tokens={$liveTokens?.output_tokens ?? 0} class="flex-1 min-h-10 my-1" />
+  <FireField mode={fireMode} progress={fireProgress} tps={liveGenTps} tokens={liveOut} class="flex-1 min-h-10 my-1" />
 
   <div class="grid grid-cols-[1.3fr_1fr_1fr] gap-x-4 shrink-0">
     {@render hero("Generation", stats.gen, "text-3xl", "Decode speed: live while generating, else the last request")}
