@@ -359,6 +359,9 @@
   // call only produces a search card once it FINISHES, so this is the only signal
   // during the seconds it runs. Server-driven: the turn loop owns the tools.
   let busyLabel = $state("");
+  // Prompt-processing progress from the server's `prefill` delta (llama-server's
+  // prompt_progress). Null when nothing is being prefilled.
+  let prefill = $state<{ done: number; total: number } | null>(null);
   let isSearching = $derived(busyLabel !== "");
   let reasoningStartTime = $state<number>(0);
   let abortController = $state<AbortController | null>(null);
@@ -943,6 +946,7 @@
     answerDone = false;
     isReasoning = false;
     busyLabel = "";
+    prefill = null;
     reasoningStartTime = 0;
     abortController = new AbortController();
     const signal = abortController.signal;
@@ -1075,6 +1079,7 @@
       answerDone = false;
       isReasoning = false;
       busyLabel = "";
+      prefill = null;
       abortController = null;
     }
 
@@ -1193,6 +1198,10 @@
         // "" = nothing running; the label is shown verbatim.
         busyLabel = d.text || "";
         break;
+      case "prefill":
+        // total 0 = prefill over (first token, or the round ended).
+        prefill = d.total > 0 ? { done: d.done || 0, total: d.total } : null;
+        break;
       case "approval":
         // A qm config change awaiting accept/deny (or its resolved outcome).
         // Lives on the bubble only for the turn; the post-turn sync drops it.
@@ -1202,11 +1211,13 @@
         // Prose is final; the stream stays open for the `titles` snapshot and
         // `done`. Carries genMs so the footer's timing is right immediately.
         busyLabel = "";
+        prefill = null;
         answerDone = true;
         if (d.genMs) patchLast(id, (m) => (m.role === "assistant" ? { ...m, genTimeMs: d.genMs } : m));
         break;
       case "done":
         busyLabel = "";
+        prefill = null;
         answerDone = true;
         if (d.genMs) patchLast(id, (m) => (m.role === "assistant" ? { ...m, genTimeMs: d.genMs } : m));
         break;
@@ -1248,6 +1259,7 @@
     answerDone = false;
     isReasoning = false;
     busyLabel = "";
+    prefill = null;
     reasoningStartTime = 0;
     abortController = new AbortController();
     const signal = abortController.signal;
@@ -1266,6 +1278,7 @@
       answerDone = false;
       isReasoning = false;
       busyLabel = "";
+      prefill = null;
       abortController = null;
     }
   }
@@ -1874,6 +1887,7 @@
             isReasoning={isReasoning && genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant"}
             isSearching={isSearching && genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant"}
             {busyLabel}
+            prefillPct={prefill && genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant" ? Math.min(100, Math.floor((prefill.done * 100) / prefill.total)) : -1}
             modelReady={modelReady}
             hasVisionInput={message.role === "assistant" && idx > 0 && getImageUrls(messages[idx - 1].content).length > 0}
             onEdit={message.role === "user" && message.rewriteInstruction == null ? (newContent, images) => editMessage(idx, newContent, images) : undefined}

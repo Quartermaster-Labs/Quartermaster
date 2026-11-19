@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -39,7 +40,7 @@ func TestStreamSSE_ReportsRouterWaitStatus(t *testing.T) {
 		func(state string, pos int) {
 			states = append(states, state)
 			positions = append(positions, pos)
-		})
+		}, nil)
 	if err != nil {
 		t.Fatalf("streamSSE: %v", err)
 	}
@@ -74,5 +75,45 @@ func TestParseWaitStatus(t *testing.T) {
 		if state != c.state || pos != c.pos {
 			t.Errorf("parseWaitStatus(%q) = %q,%d want %q,%d", c.in, state, pos, c.state, c.pos)
 		}
+	}
+}
+
+// A progress frame comes as prompt processing STARTS and carries no token: it
+// must reach onPrefill with the cached prefix taken out, and must not count as
+// the first token, or the label naming what is being prefilled would clear
+// before any of it was.
+func TestStreamSSE_PromptProgress(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["return_progress"] != true {
+			t.Errorf("request did not ask for return_progress: %v", body)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		f := w.(http.Flusher)
+		for _, p := range []int{1000, 3048, 5000} {
+			fmt.Fprintf(w, `data: {"choices":[{"delta":{"role":"assistant","content":null}}],"prompt_progress":{"total":5000,"cache":1000,"processed":%d,"time_ms":1}}`+"\n\n", p)
+		}
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		f.Flush()
+	}))
+	defer upstream.Close()
+
+	tm := newTurnTestManager(t)
+	tm.pg.SelfBase = upstream.URL
+
+	var events []string
+	var content string
+	_, err := tm.streamSSE(context.Background(), map[string]any{"model": "m"}, "c1", "",
+		func(s string) { content += s }, nil, nil, nil,
+		func(state string, _ int) { events = append(events, "status:"+state) },
+		func(done, total int) { events = append(events, fmt.Sprintf("prefill:%d/%d", done, total)) })
+	if err != nil {
+		t.Fatalf("streamSSE: %v", err)
+	}
+	want := []string{"prefill:0/4000", "prefill:2048/4000", "prefill:4000/4000", "status:"}
+	if fmt.Sprint(events) != fmt.Sprint(want) || content != "hi" {
+		t.Errorf("events=%v content=%q, want %v and %q", events, content, want, "hi")
 	}
 }

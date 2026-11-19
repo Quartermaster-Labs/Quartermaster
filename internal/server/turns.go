@@ -33,6 +33,12 @@ import (
 
 const turnFlushInterval = 2 * time.Second
 
+// prefillShowTokens is the smallest prompt (new tokens, cache excluded) whose
+// processing is shown as a percentage. llama-server reports once per batch
+// (2048 tokens by default), so anything smaller jumps from 0% straight to
+// done, in well under a second on the hardware this runs on.
+const prefillShowTokens = 2048
+
 // turnDelta is one SSE frame. Replace=true carries a full snapshot (sent once on
 // subscribe so a reopened tab syncs), Replace=false is an incremental append.
 type turnDelta struct {
@@ -42,6 +48,10 @@ type turnDelta struct {
 	Msg     string          `json:"msg,omitempty"`
 	GenMs   int64           `json:"genMs,omitempty"`
 	Data    json.RawMessage `json:"data,omitempty"` // search payload for kind=search
+	// kind=prefill: prompt tokens processed of the tokens this request has to
+	// process (the cached prefix is in neither). Total 0 clears it.
+	Done  int `json:"done,omitempty"`
+	Total int `json:"total,omitempty"`
 }
 
 // persisted turn artifacts — schema mirrors the client's ChatMessage fields so
@@ -118,6 +128,10 @@ type activeTurn struct {
 	// for the seconds a search actually takes — the user watches a source counter
 	// tick up with no indication anything is running.
 	busy string
+	// prefill is the prompt-processing progress of the round in flight, so a
+	// long prompt shows a percentage instead of a label that never changes.
+	// Zero total when nothing is being prefilled (or too little to show).
+	prefillDone, prefillTotal int
 }
 
 // turnManager owns all server-side turn generation for the playground. One
@@ -323,6 +337,29 @@ func (at *activeTurn) setBusy(label string) {
 	at.fan(turnDelta{Kind: "busy", Text: label})
 }
 
+// setPrefill publishes prompt-processing progress; total 0 clears it. Only a
+// change of whole percent is sent: llama-server reports once per batch, and the
+// UI shows no finer grain.
+func (at *activeTurn) setPrefill(done, total int) {
+	at.mu.Lock()
+	defer at.mu.Unlock()
+	if total <= 0 {
+		done, total = 0, 0
+	}
+	if total == at.prefillTotal && pct(done, total) == pct(at.prefillDone, at.prefillTotal) {
+		return
+	}
+	at.prefillDone, at.prefillTotal = done, total
+	at.fan(turnDelta{Kind: "prefill", Done: done, Total: total})
+}
+
+func pct(done, total int) int {
+	if total <= 0 {
+		return -1
+	}
+	return done * 100 / total
+}
+
 // busyLabel is what the user reads while a tool runs. The instant local tools
 // (clock / calculator / units) deliberately have none: they return in under a
 // millisecond, and a label that flashes on and off reads as a glitch.
@@ -482,6 +519,9 @@ func (at *activeTurn) subscribe() (chan turnDelta, []turnDelta, bool) {
 	if at.busy != "" {
 		// A tab that reattaches mid-search must see the search, not a silent gap.
 		snap = append(snap, turnDelta{Kind: "busy", Text: at.busy})
+	}
+	if at.prefillTotal > 0 {
+		snap = append(snap, turnDelta{Kind: "prefill", Done: at.prefillDone, Total: at.prefillTotal})
 	}
 	if len(at.thinkMs) > 0 {
 		snap = append(snap, turnDelta{Kind: "thinkMs", Replace: true, Data: mustJSON(at.thinkMs)})
@@ -1515,6 +1555,7 @@ func (tm *turnManager) streamRound(ctx context.Context, at *activeTurn, start tu
 	// A "loading" frame deliberately leaves the current label alone: on a later
 	// round the digest label is up, and the UI's own "Loading model…" line only
 	// renders on a bubble with no text yet.
+	waited := false
 	onStatus := func(state string, pos int) {
 		switch state {
 		case "waiting":
@@ -1522,6 +1563,7 @@ func (tm *turnManager) streamRound(ctx context.Context, at *activeTurn, start tu
 			if pos > 1 {
 				label = fmt.Sprintf("%s (#%d)", label, pos)
 			}
+			waited = true
 			at.setBusy(label)
 		case "loading":
 			// leave the label alone (see above)
@@ -1530,13 +1572,30 @@ func (tm *turnManager) streamRound(ctx context.Context, at *activeTurn, start tu
 			// our own wait, or the digest label for the tool output this round
 			// has just finished prefilling. The model is writing now.
 			at.setBusy("")
+			at.setPrefill(0, 0)
+		}
+	}
+	// Prompt processing has a real progress signal (llama-server's
+	// prompt_progress), the one wait in a turn that does. Below
+	// prefillShowTokens it finishes before a percentage could be read, and a
+	// label that flashes reads as a glitch, so the bubble keeps its plain one.
+	onPrefill := func(done, total int) {
+		if waited {
+			// Our request is being processed, so the queue wait is over. A
+			// digest label stays: it names what is being prefilled.
+			waited = false
+			at.setBusy("")
+		}
+		if total >= prefillShowTokens {
+			at.setPrefill(done, total)
 		}
 	}
 
-	finish, err := tm.streamSSE(ctx, body, start.ChatID, at.authKey, onContent, onReasoning, onTool, onProgress, onStatus)
+	finish, err := tm.streamSSE(ctx, body, start.ChatID, at.authKey, onContent, onReasoning, onTool, onProgress, onStatus, onPrefill)
 	// A round that produced nothing (error, or an empty stream that never
 	// tripped onStatus) must not leave a stale label shimmering.
 	at.setBusy("")
+	at.setPrefill(0, 0)
 	if err != nil {
 		return "", "", nil, "", err
 	}
@@ -1559,13 +1618,21 @@ const (
 
 // streamSSE POSTs a streamed chat completion to quartermaster's own inference
 // loopback and dispatches each delta to the callbacks. onReasoning/onTool/
-// onProgress/onStatus may be nil. Returns the finish_reason.
+// onProgress/onStatus/onPrefill may be nil. Returns the finish_reason.
 //
 // onStatus reports the router's pre-stream wait (see loadingWriter): it is the
 // one SSE *comment* frame this loop reads instead of dropping, and it is called
 // with an empty state the moment real data arrives, since a first token ends
 // every wait by definition.
-func (tm *turnManager) streamSSE(ctx context.Context, body map[string]any, chatID, authKey string, onContent func(string), onReasoning func(string), onTool func(int, string, string, string), onProgress func(), onStatus func(string, int)) (string, error) {
+//
+// onPrefill reports prompt processing as (processed, total) tokens of what this
+// request has to process, the cached prefix excluded from both. It asks for
+// return_progress, which llama-server answers with a data frame per batch that
+// carries no token; backends without it ignore the field and never call this.
+func (tm *turnManager) streamSSE(ctx context.Context, body map[string]any, chatID, authKey string, onContent func(string), onReasoning func(string), onTool func(int, string, string, string), onProgress func(), onStatus func(string, int), onPrefill func(int, int)) (string, error) {
+	if onPrefill != nil {
+		body["return_progress"] = true
+	}
 	req, err := tm.selfCompletionRequest(ctx, body, chatID, authKey)
 	if err != nil {
 		return "", err
@@ -1579,7 +1646,7 @@ func (tm *turnManager) streamSSE(ctx context.Context, body map[string]any, chatI
 		snippet, _ := readLimited(resp.Body, 1<<12)
 		return "", fmt.Errorf("upstream %s: %s", resp.Status, snippet)
 	}
-	return tm.readSSE(resp, onContent, onReasoning, onTool, onProgress, onStatus)
+	return tm.readSSE(resp, onContent, onReasoning, onTool, onProgress, onStatus, onPrefill)
 }
 
 // selfCompletionRequest builds the loopback /v1/chat/completions request every
@@ -1619,7 +1686,7 @@ func (tm *turnManager) selfCompletionRequest(ctx context.Context, body map[strin
 
 // readSSE consumes a streaming completion, dispatching deltas to the callbacks.
 // Returns the finish reason.
-func (tm *turnManager) readSSE(resp *http.Response, onContent func(string), onReasoning func(string), onTool func(int, string, string, string), onProgress func(), onStatus func(string, int)) (string, error) {
+func (tm *turnManager) readSSE(resp *http.Response, onContent func(string), onReasoning func(string), onTool func(int, string, string, string), onProgress func(), onStatus func(string, int), onPrefill func(int, int)) (string, error) {
 	finish := ""
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
@@ -1632,10 +1699,6 @@ func (tm *turnManager) readSSE(resp *http.Response, onContent func(string), onRe
 				onStatus(state, pos)
 			}
 			continue
-		}
-		if !sawData && onStatus != nil {
-			sawData = true
-			onStatus("", 0)
 		}
 		data := strings.TrimSpace(line[5:])
 		if data == "[DONE]" {
@@ -1658,8 +1721,33 @@ func (tm *turnManager) readSSE(resp *http.Response, onContent func(string), onRe
 				} `json:"delta"`
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
+			PromptProgress *struct {
+				Total     int `json:"total"`
+				Cache     int `json:"cache"`
+				Processed int `json:"processed"`
+			} `json:"prompt_progress"`
 		}
-		if json.Unmarshal([]byte(data), &chunk) != nil || len(chunk.Choices) == 0 {
+		parsed := json.Unmarshal([]byte(data), &chunk) == nil
+		// A progress frame arrives as prefill STARTS and carries no token, so it
+		// must not count as the first data: that would clear the digest label
+		// for the very prompt it names before a word of it was processed.
+		hasToken := false
+		if len(chunk.Choices) > 0 {
+			d := chunk.Choices[0].Delta
+			hasToken = d.Content != "" || d.Reasoning != "" || d.Reasoning2 != "" || len(d.ToolCalls) > 0
+		}
+		if parsed && chunk.PromptProgress != nil && !hasToken {
+			if onPrefill != nil {
+				pp := chunk.PromptProgress
+				onPrefill(max(0, pp.Processed-pp.Cache), max(0, pp.Total-pp.Cache))
+			}
+			continue
+		}
+		if !sawData && onStatus != nil {
+			sawData = true
+			onStatus("", 0)
+		}
+		if !parsed || len(chunk.Choices) == 0 {
 			continue
 		}
 		ch := chunk.Choices[0]

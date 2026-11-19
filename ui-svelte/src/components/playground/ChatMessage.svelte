@@ -54,6 +54,9 @@
     isSearching?: boolean;
     // Live activity label from the server ('Searching for "x"', 'Reading shop.com').
     busyLabel?: string;
+    // Prompt-processing progress of the round in flight, 0-100; -1 when there
+    // is none to show (short prompt, or tokens are already arriving).
+    prefillPct?: number;
     modelReady?: boolean;
     hasVisionInput?: boolean;
     // `images` is the kept attachment list: the edit UI can drop images, so a
@@ -66,7 +69,7 @@
     onAskAnswer?: (text: string) => void;
   }
 
-  let { role, content, model = "", reasoning_content = "", reasoningTimeMs = 0, thinkMs, reasoningTitle: serverReasoningTitle = "", thinkTitles, genTimeMs = 0, searches, citations, approval, onApprove, rewriteInstruction, rewriteOriginal, digestInfo, isStreaming = false, isReasoning = false, isSearching = false, busyLabel = "", modelReady = false, hasVisionInput = false, onEdit, onRegenerate, onReply, onAskAnswer }: Props = $props();
+  let { role, content, model = "", reasoning_content = "", reasoningTimeMs = 0, thinkMs, reasoningTitle: serverReasoningTitle = "", thinkTitles, genTimeMs = 0, searches, citations, approval, onApprove, rewriteInstruction, rewriteOriginal, digestInfo, isStreaming = false, isReasoning = false, isSearching = false, busyLabel = "", prefillPct = -1, modelReady = false, hasVisionInput = false, onEdit, onRegenerate, onReply, onAskAnswer }: Props = $props();
 
   // Format a JSON diff value for the approval card (null → "auto", strings bare).
   function fmtVal(v: unknown): string {
@@ -971,6 +974,10 @@
                  showing it here too drew the same search twice. -->
             {#if isSearching && isReasoning}
               <span class="font-medium reason-shimmer-white thinking-dots min-w-0">{busyLabel || "Searching"}</span>
+              {#if prefillPct >= 0}<span class="not-italic font-mono text-micro tabular-nums text-primary">{prefillPct}%</span>{/if}
+            {:else if isReasoning && prefillPct >= 0}
+              <span class="font-medium reason-shimmer-white thinking-dots">Processing prompt</span>
+              {#if prefillPct >= 0}<span class="not-italic font-mono text-micro tabular-nums text-primary">{prefillPct}%</span>{/if}
             {:else if isReasoning}
               <span class="font-medium reason-shimmer-white thinking-dots">Thinking</span>
             {:else}
@@ -1059,6 +1066,7 @@
             <span class="inline-flex items-center gap-2 text-sm italic" data-burn-skip>
               <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
               <span class="reason-shimmer-white thinking-dots font-medium">{busyLabel || "Searching the web"}</span>
+              {#if prefillPct >= 0}<span class="not-italic font-mono text-micro tabular-nums text-primary">{prefillPct}%</span>{/if}
             </span>
           {:else if isStreaming && !openThink && !isReasoning && !hasBodyText && !isSearching}
             <!-- No tokens yet. Order of waits: swap the model in, encode the image
@@ -1074,7 +1082,8 @@
             <span class="inline-flex items-center gap-2 italic" data-burn-skip>
               <!-- Glow on a wrapper: one element can run only one animation. -->
               <span class="reason-glow inline-flex"><QmMark class="w-5 h-5 qm-spin {modelReady ? '' : 'qm-spin--slow'}" /></span>
-              <span class="reason-shimmer-white thinking-dots font-medium">{!modelReady ? "Loading model" : hasVisionInput ? "Processing image" : "Generating"}</span>
+              <span class="reason-shimmer-white thinking-dots font-medium">{!modelReady ? "Loading model" : prefillPct >= 0 ? "Processing prompt" : hasVisionInput ? "Processing image" : "Generating"}</span>
+              {#if prefillPct >= 0}<span class="not-italic font-mono text-micro tabular-nums text-primary">{prefillPct}%</span>{/if}
             </span>
           {:else if pacing && !openThink && !isReasoning}
             <!-- Text is arriving: the same mark keeps spinning under the line

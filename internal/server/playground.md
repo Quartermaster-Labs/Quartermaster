@@ -66,6 +66,15 @@ API key injected. See `turns_design.md` for the full design.
   after, and **replayed in `subscribe()`'s snapshot** so a reattaching tab does not sit on a stale
   or missing status. Instant local tools (time, math, units) get `""`: a label that flickers for
   3 ms is noise.
+- A **`prefill` delta** (`done`, `total`) is prompt-processing progress, shown as a percentage beside
+  the label ("Processing prompt 46%", or after the digest label). Streamed rounds ask for
+  `return_progress`; llama-server answers with one token-less data frame per batch carrying
+  `prompt_progress {total, cache, processed}`, and `readSSE` reports `processed-cache` of
+  `total-cache`. **That frame must not count as the first token**: it arrives as prefill STARTS, and
+  treating it as data would clear the digest label before any of the prompt it names was read.
+  Shown only from 2048 new tokens (`prefillShowTokens`), deduped to whole percent, cleared at the
+  first token and at round end, and replayed in the snapshot like `busy`. Digest parts are
+  non-streamed calls, so they show the part label only.
 
 ### Reasoning-box titles
 
