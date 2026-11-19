@@ -438,6 +438,26 @@ export interface ChatMessage {
   // "pending" the bubble shows a before/after diff with Accept/Deny; once
   // resolved it shows the outcome, then drops on the post-turn server sync.
   approval?: QmApproval;
+  // Oversize-message digest (internal/server/turnsdigest.go). Set by the server
+  // on a user message too long for the model's context window: what the model
+  // was actually sent in its place (notes on each part plus the verbatim
+  // ending). Every later request sends this instead of `content`, byte for byte
+  // so the KV prefix holds, through forModel(). Cleared when the message is edited.
+  digest?: string;
+  digestInfo?: { parts: number; tokens: number; task?: string };
+}
+
+/**
+ * The message as the model should see it: a digested message's notes in place
+ * of its original text, with any images kept after them (the shape the server
+ * built, turnsdigest.go joinContent). The display copy is left untouched; the
+ * digest fields themselves are not sent.
+ */
+export function forModel(m: ChatMessage): ChatMessage {
+  const { digest, digestInfo: _info, ...rest } = m;
+  if (typeof digest !== "string") return m;
+  const media = typeof m.content === "string" ? [] : m.content.filter((p) => p.type !== "text");
+  return { ...rest, content: media.length ? [{ type: "text", text: digest }, ...media] : digest };
 }
 
 export interface QmApproval {

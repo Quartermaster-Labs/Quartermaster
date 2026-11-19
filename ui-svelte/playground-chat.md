@@ -104,6 +104,23 @@ searches or a tool call). Consequences worth knowing:
   An errored chat therefore disappears on the next flush after the turn ends, but stays on screen
   until the tab is reloaded.
 
+### Digested messages (`digest`, `forModel`)
+
+A user message too long for the context window is read in parts server-side and answered from
+notes (`internal/server/turnsdigest.go`). The server stores what it sent in the message's place on
+that message: `digest` (the text) and `digestInfo` (`{parts, tokens, task}`). The display keeps
+the original; the model never sees it again.
+
+**Every path that sends history to a model goes through `forModel()`** (`lib/types.ts`):
+`regenerateFromIndex`, `summarizeLive` and its fallback, `generateTitle`, and the `textChars`
+estimate. It swaps `digest` in for the text and keeps any images after it, the same shape the
+server built, so the next turn's prefix is byte-identical and the KV is reused. Miss one and that
+path sends the original wall of text: an overflow at best, a second full read at worst.
+`editMessage` drops both fields, since the digest described the old text. `ChatMessage` shows a
+"read in N parts, answered from notes" line under the bubble with the found request as its
+tooltip, because an answer that misses a detail is otherwise unexplained. Progress needs no UI
+work: the server's `busy` label ("Reading part 3 of 7") renders on the empty bubble like a search.
+
 ### Per-chat model memory
 
 A session records the model it ran on (`ChatSession.model`, written by `rememberModel()` on an

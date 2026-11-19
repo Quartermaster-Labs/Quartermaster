@@ -106,6 +106,11 @@ nothing mid-answer is lost, and the server surface stays small.
    `/api/chats/turn`, views the SSE stream, syncs the authoritative copy, then runs
    compaction/title; `attachIfGenerating` reconnects a running turn on (re)mount;
    Stop → `DELETE /api/chats/turn`.
+6. **Oversize-message digest** (`turnsdigest.go`): the one compaction-like step that IS
+   server-side, because it must run BEFORE round 1 (the prompt does not fit, so there is no answer
+   for the client to compact after). Opt-in per turn via `digestAt`; progress goes through the
+   existing `busy` delta ("Reading part 3 of 7"), so the SSE protocol is unchanged. See
+   `playground.md`.
 
 ## Status
 

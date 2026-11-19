@@ -56,10 +56,13 @@ export const MAX_DOCS_PER_MESSAGE = 5;
 /** Hard read cap. Beyond this a "text" file is a data dump, not a document. */
 export const MAX_DOC_BYTES = 32 * 1024 * 1024;
 /**
- * Share of the context window a single message's documents may claim. The rest
- * has to hold the system prompt, the conversation so far, and the reply.
+ * How many context windows a single message's documents may claim. A message
+ * that does not fit is read in parts server-side and answered from notes
+ * (internal/server/turnsdigest.go), so the cap is no longer "fits the window"
+ * but "is worth the wait": every window's worth is about two extra model calls
+ * before the answer starts, and the server refuses past 64 parts anyway.
  */
-export const DOC_CTX_FRACTION = 0.4;
+export const DOC_CTX_MULTIPLE = 8;
 
 export function extOf(name: string): string {
   const i = name.lastIndexOf(".");
@@ -103,7 +106,7 @@ export function estimateTokens(text: string): number {
 
 /** 0 = unknown context size, i.e. no budget can be enforced. */
 export function docBudgetTokens(ctx: number): number {
-  return ctx > 0 ? Math.floor(ctx * DOC_CTX_FRACTION) : 0;
+  return ctx > 0 ? Math.floor(ctx * DOC_CTX_MULTIPLE) : 0;
 }
 
 function fmtTok(n: number): string {
@@ -120,7 +123,7 @@ export function oversizeError(name: string, tokens: number, ctx: number, used = 
   const budget = docBudgetTokens(ctx);
   if (budget <= 0) return null; // context size unknown — don't invent a limit
   if (tokens > budget) {
-    return `"${name}" is about ${fmtTok(tokens)} tokens; this model's context is ${fmtTok(ctx)}, so an attachment can use at most ${fmtTok(budget)}. Pick a higher-context variant of the model, or attach a smaller file.`;
+    return `"${name}" is about ${fmtTok(tokens)} tokens; this model's context is ${fmtTok(ctx)}, and an attachment can use at most ${fmtTok(budget)} (one that does not fit is read in parts, which takes longer the bigger it is). Pick a higher-context variant of the model, or attach a smaller file.`;
   }
   if (used + tokens > budget) {
     return `"${name}" (${fmtTok(tokens)} tokens) doesn't fit: the files already attached use ${fmtTok(used)} of the ${fmtTok(budget)}-token attachment budget for this model.`;

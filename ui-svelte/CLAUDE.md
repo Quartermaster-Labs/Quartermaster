@@ -297,6 +297,12 @@ Both keep the last `KEEP_RECENT` (6) messages verbatim and snap the boundary for
 message, so the kept slice never starts on an orphaned assistant/tool reply whose `tool_calls` were
 summarized away.
 
+That is why compaction can never shrink ONE message too big for the window: it is the newest, so
+it is always kept. That case is handled server-side before round 1
+(`internal/server/turnsdigest.go`, opted into per turn with `digestAt: COMPACT_AT`). The client's
+only duties are to send a stored `digest` through `forModel()` and to drop it on edit; see
+[`playground-chat.md`](playground-chat.md).
+
 ## Decision tab
 
 `playground/DecisionInterface.svelte` + `lib/decisionApi.ts` (+ `decisionApi.test.ts`). A **decision

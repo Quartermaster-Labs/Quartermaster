@@ -135,6 +135,49 @@ itself sitting inside a collapsed reasoning trail. So a round whose tool produce
 transcript / the results") for the length of that prefill, cleared by the next round's first token.
 Short results (a date, an FX rate) get none: a label that flashes on and off reads as a glitch.
 
+## `turnsdigest.go`: a message too long for the window
+
+Not to be confused with the digest LABEL above. A pasted wall of text or an attached book can be
+longer than the model's context, and compaction cannot help: it folds OLD turns and always keeps
+the newest message verbatim. So before round 1, `run` calls `digestOversize`, which rewrites only
+the last user message, and only when the turn opted in (`turnStart.DigestAt`, the client's
+`COMPACT_AT`; a rewrite turn sends none) and the prompt would pass `DigestAt` of the window.
+
+- **The window is resolved server-side** (`Server.conversationCtx`, `apigroup.go`): the per-slot
+  `-c` off the command the model is RUNNING under, else the configured one. `perSlotCtx` is shared
+  with `/v1/models`, so the catalog and the digest cannot disagree. Never taken from the body.
+- **Task first.** One cheap call sees the first and last ~2k tokens and answers
+  `<task>...</task>` or `<task>NONE</task>`. Every part is then read FOR that request, because a
+  blind summary keeps the gist and drops the one line the question was about. Each part's prompt
+  also asks the model to copy out any request it meets, which catches one buried mid-text; those
+  are used only when the probe found none.
+- **Map, then reduce.** Parts (`splitChunks`: paragraph > line > sentence > space, UTF-8 safe)
+  are ~45% of the window each and read independently. Only if the notes together overflow are
+  neighbours merged, at most `digestMaxReduce` (3) times. Rolling refine ("summary so far + next
+  part") was rejected: it re-summarizes part 1 once per part.
+- **The ending stays verbatim** (`tailCut`, up to 4k tokens): the likeliest place for the
+  question, and paraphrasing the question is the worst loss there is.
+- **Tokens are estimated from bytes**, starting at 3.5 bytes/token and recalibrated from the
+  probe's `usage.prompt_tokens`. Inlined images count a flat 1024 tokens, never their base64
+  bytes. A part that still overflows is halved and retried (`digestMaxSplits`).
+- **Overflow fallback.** If the estimate said "fits" and llama-server refuses anyway
+  (`exceed_context_size_error`, which comes before any prefill, so the miss is free), `run`
+  digests with `force` and llama-server's exact `n_prompt_tokens`, then retries once. Only while
+  the turn is `pristine()`: an overflow after a tool round is caused by the tool results, and
+  rerunning would repeat the searches.
+- **Calls** are non-streamed, thinking off, temperature 0.2, under
+  `X-Conversation-Id: <chat>#digest`, so the parts share a KV prefix (one system prompt for all)
+  without being mistaken for the chat. The cost is one slot-cache switch away from the chat and
+  back. They send `X-QM-Hold-Ms`, which `selfCompletionRequest` omits for a tool-less body, so the
+  model is not swapped out between part 3 and part 4.
+- **Persisted** on the user message in chats.json as `digest` (the exact replacement text) and
+  `digestInfo {parts, tokens, task}`. The client sends `digest` in place of the content from then
+  on (`forModel`), byte for byte, so the next turn reuses the KV instead of reading the text
+  again. Editing the message drops both fields.
+- **Refusals carry numbers**: over `digestMaxParts` (64) parts, a context too small to hold a
+  part, a history that already fills the window (compact first), or notes that still overflow
+  after the merges.
+
 ## `titlegen.go` — the title model
 
 One-line titles for collapsed reasoning boxes ("Thought for 2s · Weighing the two quant options").

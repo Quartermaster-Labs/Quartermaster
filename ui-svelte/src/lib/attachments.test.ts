@@ -62,21 +62,21 @@ describe("size budget", () => {
     expect(estimateTokens("a".repeat(400))).toBe(100);
   });
 
-  it("budgets a fraction of the window, and nothing when the window is unknown", () => {
-    expect(docBudgetTokens(32768)).toBe(13107);
+  it("budgets a multiple of the window, and nothing when the window is unknown", () => {
+    expect(docBudgetTokens(32768)).toBe(262144);
     expect(docBudgetTokens(0)).toBe(0);
   });
 
   it("rejects a file bigger than the budget, naming both numbers", () => {
-    const msg = oversizeError("book.pdf", 150000, 32768);
+    const msg = oversizeError("book.pdf", 300000, 32768);
     expect(msg).toContain("book.pdf");
-    expect(msg).toContain("150k");
+    expect(msg).toContain("300k");
     expect(msg).toContain("33k");
   });
 
   it("rejects a file that only overflows together with earlier ones", () => {
     expect(oversizeError("b.md", 5000, 32768, 0)).toBeNull();
-    expect(oversizeError("b.md", 5000, 32768, 10000)).toContain("already attached");
+    expect(oversizeError("b.md", 5000, 32768, 260000)).toContain("already attached");
   });
 
   it("enforces no limit when the context size is unknown", () => {

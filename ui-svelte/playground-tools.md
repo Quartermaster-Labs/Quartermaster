@@ -254,9 +254,11 @@ base image.
 
 ### Size is checked at attach time, not at send
 
-`estimateTokens` (~4 chars/token) against `docBudgetTokens` = 40% of the window (live `n_ctx`, else
-the catalog's `ctx`), rejected naming both figures, and re-checked against what the other attachments
-already claim. An unknown ctx enforces nothing rather than guessing. Send is blocked while any file
+`estimateTokens` (~4 chars/token) against `docBudgetTokens` = `DOC_CTX_MULTIPLE` (8) windows (live
+`n_ctx`, else the catalog's `ctx`), rejected naming both figures, and re-checked against what the
+other attachments already claim. The cap was 40% of ONE window until the server learned to read an
+oversize message in parts (`internal/server/turnsdigest.go`); it is now "worth the wait", since
+each window's worth costs about two model calls before the answer starts. An unknown ctx enforces nothing rather than guessing. Send is blocked while any file
 is still being read, so a half-extracted set can't go out.
 
 ## Playground libs (`src/lib/`)

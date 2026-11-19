@@ -46,6 +46,9 @@
     onApprove?: (id: string, accept: boolean) => void;
     rewriteInstruction?: string;
     rewriteOriginal?: string;
+    // Set when the server read this (user) message in parts because it did not
+    // fit the context window (turnsdigest.go): the model answered from notes.
+    digestInfo?: { parts: number; tokens: number; task?: string };
     isStreaming?: boolean;
     isReasoning?: boolean;
     isSearching?: boolean;
@@ -63,7 +66,7 @@
     onAskAnswer?: (text: string) => void;
   }
 
-  let { role, content, model = "", reasoning_content = "", reasoningTimeMs = 0, thinkMs, reasoningTitle: serverReasoningTitle = "", thinkTitles, genTimeMs = 0, searches, citations, approval, onApprove, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, busyLabel = "", modelReady = false, hasVisionInput = false, onEdit, onRegenerate, onReply, onAskAnswer }: Props = $props();
+  let { role, content, model = "", reasoning_content = "", reasoningTimeMs = 0, thinkMs, reasoningTitle: serverReasoningTitle = "", thinkTitles, genTimeMs = 0, searches, citations, approval, onApprove, rewriteInstruction, rewriteOriginal, digestInfo, isStreaming = false, isReasoning = false, isSearching = false, busyLabel = "", modelReady = false, hasVisionInput = false, onEdit, onRegenerate, onReply, onAskAnswer }: Props = $props();
 
   // Format a JSON diff value for the approval card (null → "auto", strings bare).
   function fmtVal(v: unknown): string {
@@ -1368,6 +1371,17 @@
         {#each ytIds as vid (vid)}
           <YouTubeEmbed id={vid} onDark />
         {/each}
+        {#if digestInfo}
+          <!-- The model never saw this text whole: say so on the message itself,
+               since an answer that misses a detail is otherwise unexplained. -->
+          <div
+            class="mt-2 flex items-center gap-1.5 text-[0.6875rem] opacity-80"
+            use:tip={digestInfo.task ? `Request found: ${digestInfo.task}` : "No explicit request found; the notes record the content"}
+          >
+            <BookOpen class="w-3.5 h-3.5 shrink-0" />
+            <span>Too long for the context: read in {digestInfo.parts} {digestInfo.parts === 1 ? "part" : "parts"} (about {digestInfo.tokens >= 1000 ? `${Math.round(digestInfo.tokens / 1000)}k` : digestInfo.tokens} tokens), answered from notes</span>
+          </div>
+        {/if}
         {#if canEdit}
           <button
             class="absolute top-1.5 right-1.5 p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all bg-white/10 text-white/70 hover:text-white hover:bg-white/25"

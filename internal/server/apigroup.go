@@ -295,17 +295,7 @@ func (s *Server) modelStatus() []apiModel {
 				capsMap["decision_backend_outdated"] = true
 			}
 		}
-		ctxSize := 0
-		if v, ok := info.Value("-c", "--ctx-size"); ok {
-			ctxSize, _ = strconv.Atoi(strings.TrimSpace(v))
-		}
-		slots := 0
-		if v, ok := info.Value("-np", "--parallel"); ok {
-			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 1 {
-				slots = n
-				ctxSize /= n // -c is the shared pool; report the per-conversation share
-			}
-		}
+		ctxSize, slots := perSlotCtx(info)
 		family := modelGguf(mc)
 		quantName, quantLabel, modelKey, familyKey := modelKeys(family, id)
 		modelKey = engineScopedKey(modelKey, mc)
@@ -742,4 +732,38 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// perSlotCtx is the context window ONE conversation gets under a launch
+// command, and the slot count when it serves more than one (0 otherwise):
+// -c is the pool all -np slots share, so the raw -c would promise N times the
+// context any single chat can hold.
+func perSlotCtx(info *config.CmdInfo) (ctx, slots int) {
+	if v, ok := info.Value("-c", "--ctx-size"); ok {
+		ctx, _ = strconv.Atoi(strings.TrimSpace(v))
+	}
+	if v, ok := info.Value("-np", "--parallel"); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 1 {
+			slots = n
+			ctx /= n
+		}
+	}
+	return ctx, slots
+}
+
+// conversationCtx is perSlotCtx for a model id, read off the command the model
+// is RUNNING under when it is up (a live edit or offload rewrite can differ from
+// the config), else the configured one. 0 = unknown model or no -c flag.
+func (s *Server) conversationCtx(model string) int {
+	cfg := s.config()
+	id, ok := cfg.RealModelName(model)
+	if !ok {
+		return 0
+	}
+	cmd := cfg.Models[id].Cmd
+	if running, ok := s.local.LaunchedCmd(id); ok && running != "" {
+		cmd = running
+	}
+	ctx, _ := perSlotCtx(config.ParseCmd(cmd))
+	return ctx
 }

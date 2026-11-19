@@ -187,6 +187,16 @@ type turnStart struct {
 	// configured when the user pressed send. turnStart is in-memory only and is
 	// never written into chats.json, so the API keys in it are not persisted.
 	SearchProviders []searchProviderCfg `json:"searchProviders,omitempty"`
+
+	// DigestAt is the share of the context window a prompt may fill before an
+	// oversize newest message is read in parts (turnsdigest.go). The client
+	// sends its compaction threshold; 0 (a rewrite turn, an older client) = off.
+	DigestAt float64 `json:"digestAt,omitempty"`
+
+	// ctxTokens is the window one conversation gets on this model, resolved by
+	// handleTurnStart from the launch command (0 = unknown, digest off). Never
+	// read from the body: the client's number is a cached catalog reading.
+	ctxTokens int
 }
 
 // providerChain is the chain to search with, falling back to the legacy
@@ -423,6 +433,16 @@ func (at *activeTurn) answerText() string {
 	return answerOnly(at.content)
 }
 
+// pristine reports that the turn has produced nothing yet: no answer, no
+// reasoning, no tool call. Only then is an overflow the OPENING prompt's fault
+// (and a digest-and-retry safe); one after a search round is the tool results
+// and rerunning would repeat the searches.
+func (at *activeTurn) pristine() bool {
+	at.mu.Lock()
+	defer at.mu.Unlock()
+	return at.content == "" && at.reasoning == "" && at.thinkBytes == 0 && len(at.searches) == 0
+}
+
 // thinking returns every reasoning byte emitted this turn, including what was
 // inlined into content — len(at.reasoning) alone would undercount the budget.
 func (at *activeTurn) thinking() int {
@@ -523,6 +543,7 @@ func (s *Server) handleTurnStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	start.ctxTokens = s.conversationCtx(start.Model)
 
 	tm.mu.Lock()
 	if cur, ok := tm.active[user]; ok && !cur.isDone() {
@@ -730,7 +751,26 @@ func (tm *turnManager) run(ctx context.Context, user string, at *activeTurn, sta
 	start.Messages = tm.pg.inlineMedia(user, start.Messages)
 	tm.startTitler(ctx, at) // titles each reasoning box as it closes (titlegen.go)
 	kind, msg := "done", ""
-	if err := tm.runLoop(ctx, at, start); err != nil && ctx.Err() == nil {
+	// A message too long for the window is read in parts first (turnsdigest.go).
+	// The estimate can miss (code, CJK), so an overflow refusal on the opening
+	// round runs the digest with llama-server's exact count and retries once;
+	// the refusal comes before any prefill, so the miss costs nothing.
+	digested, err := tm.digestOversize(ctx, user, at, &start, false, 0)
+	if err == nil {
+		err = tm.runLoop(ctx, at, start)
+		if !digested && start.DigestAt > 0 && isContextOverflow(err) && at.pristine() {
+			overflow := err
+			if digested, err = tm.digestOversize(ctx, user, at, &start, true, overflowPromptTokens(overflow)); err == nil {
+				if digested {
+					err = tm.runLoop(ctx, at, start)
+				} else {
+					err = overflow // nothing to digest (no text in the last message)
+				}
+			}
+		}
+	}
+	at.setBusy("")
+	if err != nil && ctx.Err() == nil {
 		kind, msg = "error", err.Error()
 		tm.log.Warnf("turn: %s on %s failed after %s: %v", user, start.Model, time.Since(began).Round(time.Millisecond), err)
 	} else {
