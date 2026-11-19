@@ -357,3 +357,29 @@ func TestDigest_BuildDigest(t *testing.T) {
 		}
 	})
 }
+
+// Isabella's book on a 131k window: ~96k tokens of note room over 4 parts of
+// ~58k. The old flat 3000-token cap used 12k of it. Now each note may have a
+// sixth of its part, and the hard stop leaves room for the model's overrun.
+func TestDigest_NoteSizing(t *testing.T) {
+	const room, chunk = 96000, 58500
+	noteCap := chunk / digestMinCompression
+	if got := noteTarget(room, 4, noteCap); got != noteCap {
+		t.Errorf("4 parts: target %d, want the part ceiling %d", got, noteCap)
+	}
+	// Many parts share the room; notes that all overrun to the hard stop
+	// still fit it, so an overrun never forces a merge pass.
+	for _, n := range []int{9, 16, 40} {
+		target := noteTarget(room, n, noteCap)
+		if total := n * noteMaxTokens(target); target > digestMinNoteTokens && total > room {
+			t.Errorf("%d parts: %d notes at max_tokens %d = %d, over the room %d", n, n, noteMaxTokens(target), total, room)
+		}
+	}
+	if got := noteTarget(1000, 40, noteCap); got != digestMinNoteTokens {
+		t.Errorf("starved room: target %d, want the floor %d", got, digestMinNoteTokens)
+	}
+	// One call holds a part and its longest note inside the window.
+	if part, note := chunk, noteMaxTokens(noteCap); float64(part+note) > float64(chunk)/digestChunkShare {
+		t.Errorf("part %d + note %d overflows the window", part, note)
+	}
+}

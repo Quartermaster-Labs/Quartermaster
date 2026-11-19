@@ -932,6 +932,11 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 	ytToolUsed := false
 	doneCalls := map[string]string{} // name+args → result, for the repeat-call guard
 	round := 0
+	// dupRounds counts consecutive rounds whose every call was a repeat. Once a
+	// model is in that rut it does not leave (see turnMaxDupRounds), and
+	// noTools then takes the tools away so it has to answer.
+	dupRounds := 0
+	noTools := false
 
 	for {
 		think := baseThink
@@ -952,10 +957,36 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 		if forceTools && round == 0 {
 			toolChoice = "required"
 		}
+		if useTools && !noTools && (dupRounds >= turnMaxDupRounds || round >= turnMaxRounds) {
+			// Appended at the tail like the no-answer nudge, so the prefix and
+			// its KV stay as they are.
+			noTools = true
+			apiTail = append(apiTail, mustJSON(map[string]any{
+				"role": "user", "content": toolLoopNudge,
+			}))
+			msgs = append(msgs, apiTail[len(apiTail)-1])
+			if tm.log != nil {
+				tm.log.Warnf("turn: %s stopped calling tools after %d rounds (%d in a row repeated earlier calls); asking for the answer", start.ChatID, round, dupRounds)
+			}
+		}
+		if noTools {
+			toolChoice = "none"
+		}
 		round++
 		roundContent, roundReasoning, calls, _, err := tm.streamRound(ctx, at, start, msgs, maxTokens, think, toolChoice)
 		if err != nil {
 			return err
+		}
+		if noTools && len(calls) > 0 {
+			// tool_choice "none" is a request, not a guarantee: a template can
+			// still render the tools and the model still call one. Nothing more
+			// is run; the turn ends here with what it has.
+			at.mu.Lock()
+			at.closeInline()
+			at.emitContent(toolLoopMarker)
+			at.mu.Unlock()
+			final = assistantRound(roundContent, roundReasoning, nil)
+			return nil
 		}
 
 		// No tool calls (or tools off) → the turn is complete.
@@ -1015,6 +1046,7 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 		// Label for the silence AFTER this round's tools return: the model has
 		// to prefill whatever they produced before it can write a token.
 		digest := ""
+		fresh := 0 // calls this round that were not repeats
 		for _, tc := range calls {
 			// Models re-issue a call they already made — the same channel listing
 			// twice in one round, or again next round after ignoring the result.
@@ -1030,6 +1062,7 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 				}))
 				continue
 			}
+			fresh++
 
 			citesBefore := citeOffset
 			query := parseToolQuery(tc.Args)
@@ -1467,6 +1500,11 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 		// next tool's own label.
 		at.setBusy(digest)
 		tm.flush("", at, false, "") // checkpoint after the tool round
+		if fresh == 0 {
+			dupRounds++
+		} else {
+			dupRounds = 0
+		}
 	}
 }
 

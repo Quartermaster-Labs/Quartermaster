@@ -55,6 +55,12 @@ API key injected. See `turns_design.md` for the full design.
 - **Repeat tool calls are deduped per turn** (`doneCalls`, keyed name+args): the second identical
   call gets the first result back with a note, re-executes nothing and paints no second card — weak
   models re-issue the same channel listing round after round.
+- **A turn that only repeats stops calling tools.** The repeat guard re-executes nothing, so no
+  per-tool cap ever counts a repeat, and a model that ignores the note loops forever (2026-11-19:
+  one `calculate` call about a hundred times, a round a second, until the model was unloaded).
+  After `turnMaxDupRounds` (2) rounds in a row made only of repeats, or `turnMaxRounds` (64)
+  rounds of any kind, the runner appends `toolLoopNudge` at the tail (KV prefix kept) and sends
+  `tool_choice: "none"`. A model that calls a tool anyway ends the turn with `toolLoopMarker`.
 - Search-card `kind` distinguishes the three YouTube tools (`youtube` = transcript,
   `youtube-search`, `youtube-comments`), because one shared kind labelled a metadata listing as if
   the video had been watched.
@@ -173,6 +179,13 @@ the last user message, and only when the turn opted in (`turnStart.DigestAt`, th
   are ~45% of the window each and read independently. Only if the notes together overflow are
   neighbours merged, at most `digestMaxReduce` (3) times. Rolling refine ("summary so far + next
   part") was rejected: it re-summarizes part 1 once per part.
+- **Note size comes from the room, not a constant** (`noteTarget`, `noteMaxTokens`). Each note is
+  asked for two thirds of an even share of the free room, capped at a sixth of its part
+  (`digestMinCompression`), floored at 256. `max_tokens` is the target plus half again, because
+  models overrun a stated length and a note cut at `max_tokens` loses its END, which is the end of
+  its part. A flat 3000-token cap did exactly that to a 4-part book on a 131k window: 12k of ~96k
+  tokens of room used, every note cut, and the answer listed the chapters it never saw. The cost is
+  decode time: four notes near 9.7k each is ~14 minutes of decode at ~45 t/s, against ~4.5 before.
 - **The ending stays verbatim** (`tailCut`, up to 4k tokens): the likeliest place for the
   question, and paraphrasing the question is the worst loss there is.
 - **Tokens are estimated from bytes**, starting at 3.5 bytes/token and recalibrated from the
