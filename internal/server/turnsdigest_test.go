@@ -358,11 +358,11 @@ func TestDigest_BuildDigest(t *testing.T) {
 	})
 }
 
-// Isabella's book on a 131k window: ~96k tokens of note room over 4 parts of
-// ~58k. The old flat 3000-token cap used 12k of it. Now each note may have a
+// Isabella's book on a 151k window: ~115k tokens of note room over parts of
+// ~68k. The old flat 3000-token cap used 12k of it. Now each note may have a
 // sixth of its part, and the hard stop leaves room for the model's overrun.
 func TestDigest_NoteSizing(t *testing.T) {
-	const room, chunk = 96000, 58500
+	const room, chunk = 115000, 67700
 	noteCap := chunk / digestMinCompression
 	if got := noteTarget(room, 4, noteCap); got != noteCap {
 		t.Errorf("4 parts: target %d, want the part ceiling %d", got, noteCap)

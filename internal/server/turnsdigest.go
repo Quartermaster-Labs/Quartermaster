@@ -62,7 +62,7 @@ const (
 	// what sizes a note; this only stops a few parts in a big window from
 	// asking for notes that are nearly a copy, whose decode (~45 t/s on a 27B)
 	// costs more than the detail is worth. It replaced a flat 3000-token cap
-	// that, on a 131k window, used 12k of ~96k tokens of note room and cut
+	// that, on a 151k window, used 12k of ~115k tokens of note room and cut
 	// every note of a 4-part book short: the answer named the missing chapters.
 	digestMinCompression = 6
 	// The digest's own framing (the explanatory header, tags).

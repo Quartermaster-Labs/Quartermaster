@@ -183,9 +183,9 @@ the last user message, and only when the turn opted in (`turnStart.DigestAt`, th
   asked for two thirds of an even share of the free room, capped at a sixth of its part
   (`digestMinCompression`), floored at 256. `max_tokens` is the target plus half again, because
   models overrun a stated length and a note cut at `max_tokens` loses its END, which is the end of
-  its part. A flat 3000-token cap did exactly that to a 4-part book on a 131k window: 12k of ~96k
+  its part. A flat 3000-token cap did exactly that to a 4-part book on a 151k window: 12k of ~115k
   tokens of room used, every note cut, and the answer listed the chapters it never saw. The cost is
-  decode time: four notes near 9.7k each is ~14 minutes of decode at ~45 t/s, against ~4.5 before.
+  decode time: three notes near 11k each is ~12.5 minutes of decode at ~45 t/s, against ~4.5 before.
 - **The ending stays verbatim** (`tailCut`, up to 4k tokens): the likeliest place for the
   question, and paraphrasing the question is the worst loss there is.
 - **Tokens are estimated from bytes**, starting at 3.5 bytes/token and recalibrated from the
