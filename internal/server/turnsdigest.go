@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -55,6 +56,14 @@ const (
 	digestTailMaxTokens = 4000
 	// How much of the beginning and of the end the task probe sees.
 	digestProbeTokens = 2000
+	// How much of the conversation BEFORE the long message the probe sees, and
+	// how much of any one earlier message. The request is often made there:
+	// "I'll paste my book, summarise it", then a message that is only the book.
+	// 2026-11-19: without it the probe answered NONE for exactly that, every
+	// note was written blind ("preserve every fact"), and each came out as a
+	// retelling at ~38% of its part that no note limit could hold.
+	digestPriorTokens   = 2000
+	digestPriorMsgBytes = 2400
 	// Per-part note size floor. Below it the notes say nothing, so many parts
 	// are reduced in a second pass instead of starved.
 	digestMinNoteTokens = 256
@@ -73,7 +82,21 @@ const (
 	digestMaxParts  = 64
 	digestMaxReduce = 3
 	digestMaxSplits = 8
+	// How many times a cut-off part note is asked to continue.
+	digestMaxContinues = 2
 )
+
+// digestPacing goes before every part's length line. A note is written front to
+// back with no sense of its remaining room: 2026-11-19, a part note spent 59%
+// of itself on the first 44% of its part and never reached the last third.
+const digestPacing = "Cover the whole part evenly, through to its last line: the end matters as much as the start. "
+
+// continueNotes asks for the rest of a part note that ran out of room.
+func continueNotes(sofar string) string {
+	return "Your notes on this part so far are below. They were cut off before the end of the part. " +
+		"Continue them from exactly where they stop, through to the end of the part, in the same style. Do not repeat what they already cover.\n\n" +
+		"<notes_so_far>\n" + sofar + "\n</notes_so_far>\n\n"
+}
 
 var (
 	taskTagRe       = regexp.MustCompile(`(?is)<task>(.*?)</task>`)
@@ -164,7 +187,10 @@ func (tm *turnManager) digestOversize(ctx context.Context, user string, at *acti
 	}
 	probe := "<beginning>\n" + head + "\n</beginning>\n\n[... about " + fmtK(tok(tailFrom-len(head))) +
 		" tokens omitted ...]\n\n<end>\n" + text[tailFrom:] + "\n</end>"
-	out, promptTok, err := tm.digestComplete(ctx, at, *start, digestTaskSys, probe, 512)
+	if before := priorTurns(msgs[:ui], int(digestPriorTokens*ratio)); before != "" {
+		probe = "<conversation_before>\n" + before + "\n</conversation_before>\n\n<long_message>\n" + probe + "\n</long_message>"
+	}
+	out, promptTok, _, err := tm.digestComplete(ctx, at, *start, digestTaskSys, probe, 512)
 	if err != nil {
 		return false, fmt.Errorf("reading the long message: %w", err)
 	}
@@ -206,7 +232,18 @@ func (tm *turnManager) digestOversize(ctx context.Context, user string, at *acti
 	splits := 0
 	for i := 0; i < len(parts); i++ {
 		at.setBusy(fmt.Sprintf("Reading part %d of %d", i+1, len(parts)))
-		out, _, err := tm.digestComplete(ctx, at, *start, sys, fmt.Sprintf("<part n=\"%d\" of=\"%d\">\n%s\n</part>\n\n%s", i+1, len(parts), parts[i], noteLength(perNote)), noteMaxTokens(perNote))
+		part := fmt.Sprintf("<part n=\"%d\" of=\"%d\">\n%s\n</part>\n\n", i+1, len(parts), parts[i])
+		out, _, cut, err := tm.digestComplete(ctx, at, *start, sys, part+digestPacing+noteLength(perNote), noteMaxTokens(perNote))
+		// A note that ran into max_tokens lost the END of its part. Ask for the
+		// rest rather than re-reading the part in halves: the same part leads
+		// the prompt, so its KV is reused and only the notes so far are new,
+		// where a split would throw away minutes of decode.
+		for c := 0; err == nil && cut && c < digestMaxContinues; c++ {
+			at.setBusy(fmt.Sprintf("Reading part %d of %d (finishing its notes)", i+1, len(parts)))
+			var more string
+			more, _, cut, err = tm.digestComplete(ctx, at, *start, sys, part+continueNotes(out)+noteLength(perNote), noteMaxTokens(perNote))
+			out += "\n" + more
+		}
 		if err != nil {
 			if isContextOverflow(err) && splits < digestMaxSplits && len(parts[i]) > 4096 {
 				// The ratio was off for this stretch (code, CJK): halve it and retry.
@@ -239,7 +276,7 @@ func (tm *turnManager) digestOversize(ctx context.Context, user string, at *acti
 		merged := make([]string, 0, len(groups))
 		for gi, g := range groups {
 			at.setBusy(fmt.Sprintf("Merging notes %d of %d", gi+1, len(groups)))
-			out, _, err := tm.digestComplete(ctx, at, *start, rsys, g+"\n\n"+noteLength(target), noteMaxTokens(target))
+			out, _, _, err := tm.digestComplete(ctx, at, *start, rsys, g+"\n\n"+noteLength(target), noteMaxTokens(target))
 			if err != nil {
 				return false, fmt.Errorf("merging notes: %w", err)
 			}
@@ -267,8 +304,9 @@ func (tm *turnManager) digestOversize(ctx context.Context, user string, at *acti
 // digestComplete is one non-streamed, thinking-off call to the turn's model,
 // under the chat's digest conversation id so the parts share a KV prefix
 // (identical system message) without displacing the chat's own slot entry.
-// Returns the answer and the measured prompt size.
-func (tm *turnManager) digestComplete(ctx context.Context, at *activeTurn, start turnStart, sys, user string, maxTokens int) (string, int, error) {
+// Returns the answer, the measured prompt size, and whether the answer ran into
+// maxTokens and was cut.
+func (tm *turnManager) digestComplete(ctx context.Context, at *activeTurn, start turnStart, sys, user string, maxTokens int) (string, int, bool, error) {
 	body := map[string]any{
 		"model": start.Model,
 		"messages": []map[string]string{
@@ -282,19 +320,19 @@ func (tm *turnManager) digestComplete(ctx context.Context, at *activeTurn, start
 	}
 	req, err := tm.selfCompletionRequest(ctx, body, start.ChatID+"#digest", at.authKey)
 	if err != nil {
-		return "", 0, err
+		return "", 0, false, err
 	}
 	// Hold the model between parts: without tools selfCompletionRequest asks
 	// for no hold, and a swap between part 3 and part 4 reloads the model.
 	req.Header.Set("X-QM-Hold-Ms", strconv.Itoa(playgroundHoldMs))
 	resp, err := tm.client.Do(req)
 	if err != nil {
-		return "", 0, err
+		return "", 0, false, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := readLimited(resp.Body, 1<<12)
-		return "", 0, fmt.Errorf("upstream %s: %s", resp.Status, snippet)
+		return "", 0, false, fmt.Errorf("upstream %s: %s", resp.Status, snippet)
 	}
 	var r struct {
 		Choices []struct {
@@ -308,17 +346,18 @@ func (tm *turnManager) digestComplete(ctx context.Context, at *activeTurn, start
 		} `json:"usage"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return "", 0, err
+		return "", 0, false, err
 	}
 	if len(r.Choices) == 0 {
-		return "", r.Usage.PromptTokens, errors.New("empty completion")
+		return "", r.Usage.PromptTokens, false, errors.New("empty completion")
 	}
-	if r.Choices[0].FinishReason == "length" {
-		// The note ran into max_tokens and lost its end. max_tokens is half
-		// again the target noteLength asks for, so the model ignored it badly.
+	cut := r.Choices[0].FinishReason == "length"
+	if cut {
+		// max_tokens is half again the target noteLength asks for, so the model
+		// ignored the target badly. The part loop asks for the rest.
 		tm.log.Warnf("turn: a digest note on %s hit its %d-token cap and was cut short", start.Model, maxTokens)
 	}
-	return strings.TrimSpace(answerOnly(r.Choices[0].Message.Content)), r.Usage.PromptTokens, nil
+	return strings.TrimSpace(answerOnly(r.Choices[0].Message.Content)), r.Usage.PromptTokens, cut, nil
 }
 
 // persistDigest stores the digest on the session's user message, so the client
@@ -349,9 +388,41 @@ func (tm *turnManager) persistDigest(user, chatID, digest string, info digestInf
 // --- prompts ---------------------------------------------------------------
 
 const digestTaskSys = "You are a preprocessing step for an assistant. You are shown the BEGINNING and the END of a very long message a user sent; the middle is omitted. " +
-	"Identify what the user wants the assistant to do with the message: a question, an instruction or a request, including any constraints on the form of the answer. " +
+	"You may also be shown the conversation before it, shortened. " +
+	"Identify what the user wants the assistant to do with the long message: a question, an instruction or a request, including any constraints on the form of the answer. " +
+	"The request may be in the long message itself or earlier in the conversation (for example: the user said what they want, then sent the material). If both have one, the one in the long message wins. " +
 	"Reply with exactly one line: <task>the request, quoted or closely restated</task>. " +
-	"If the visible parts contain no request (the message is only material), reply <task>NONE</task>."
+	"If neither contains a request for this material, reply <task>NONE</task>."
+
+// priorTurns renders the conversation before the long message for the task
+// probe, newest kept first, within budget bytes. Each message is shortened to
+// its start and end, where a request and a plan usually sit. Tool messages and
+// reasoning are left out: neither says what the user wants.
+func priorTurns(msgs []json.RawMessage, budget int) string {
+	var out []string
+	for i := len(msgs) - 1; i >= 0 && budget > 0; i-- {
+		var m map[string]any
+		if json.Unmarshal(msgs[i], &m) != nil {
+			continue
+		}
+		role, _ := m["role"].(string)
+		if role != "user" && role != "assistant" {
+			continue
+		}
+		text, _ := splitContent(m["content"])
+		text = strings.TrimSpace(thinkTagStripper.Replace(answerOnly(text)))
+		if text == "" {
+			continue
+		}
+		if keep := min(digestPriorMsgBytes, budget); len(text) > keep {
+			text = text[:cutAt(text, keep/2)] + "\n[...]\n" + text[tailCut(text, keep/2):]
+		}
+		budget -= len(text)
+		out = append(out, "["+role+"]\n"+text)
+	}
+	slices.Reverse(out)
+	return strings.Join(out, "\n\n")
+}
 
 func digestPartSys(task string) string {
 	lead := "You are reading one part of a long message a user sent to an assistant. The message is too long to read at once, so it is read in parts and notes are taken on each part. The assistant will answer from the notes alone and will never see this part again.\n\n"

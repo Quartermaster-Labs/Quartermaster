@@ -174,7 +174,12 @@ the last user message, and only when the turn opted in (`turnStart.DigestAt`, th
   `<task>...</task>` or `<task>NONE</task>`. Every part is then read FOR that request, because a
   blind summary keeps the gist and drops the one line the question was about. Each part's prompt
   also asks the model to copy out any request it meets, which catches one buried mid-text; those
-  are used only when the probe found none.
+  are used only when the probe found none. The probe also sees the conversation BEFORE the message
+  (`priorTurns`: up to ~2k tokens, newest first, each turn cut to its start and end, no reasoning
+  or tool messages), because "I'll paste my book, summarise it" usually comes a turn before a
+  message that is only the book. Without it that book got `NONE`, every note was written blind
+  ("preserve every fact"), and each came out as a ~38% retelling of its part that no note size
+  could hold.
 - **Map, then reduce.** Parts (`splitChunks`: paragraph > line > sentence > space, UTF-8 safe)
   are ~45% of the window each and read independently. Only if the notes together overflow are
   neighbours merged, at most `digestMaxReduce` (3) times. Rolling refine ("summary so far + next
@@ -186,6 +191,13 @@ the last user message, and only when the turn opted in (`turnStart.DigestAt`, th
   its part. A flat 3000-token cap did exactly that to a 4-part book on a 151k window: 12k of ~115k
   tokens of room used, every note cut, and the answer listed the chapters it never saw. The cost is
   decode time: three notes near 11k each is ~12.5 minutes of decode at ~45 t/s, against ~4.5 before.
+- **A cut note is continued, not lost** (`digestMaxContinues`, `continueNotes`). A part note that
+  ends on `finish_reason: length` is asked for the rest: same part, then the notes so far, "continue
+  from where they stop". The part leads both prompts, so its KV is reused and the extra prefill is
+  only the notes; re-reading the part in halves would throw the first note's decode away. Every
+  part prompt also carries `digestPacing` ("cover the whole part evenly"): a note is written front
+  to back with no sense of its remaining room, and one spent 59% of itself on the first 44% of its
+  part.
 - **The ending stays verbatim** (`tailCut`, up to 4k tokens): the likeliest place for the
   question, and paraphrasing the question is the worst loss there is.
 - **Tokens are estimated from bytes**, starting at 3.5 bytes/token and recalibrated from the

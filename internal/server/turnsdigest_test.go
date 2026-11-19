@@ -383,3 +383,42 @@ func TestDigest_NoteSizing(t *testing.T) {
 		t.Errorf("part %d + note %d overflows the window", part, note)
 	}
 }
+
+// The request made turns before the material must reach the probe: newest kept
+// first, long messages cut to start and end, reasoning and tool messages left out.
+func TestDigest_PriorTurns(t *testing.T) {
+	raw := func(m map[string]any) json.RawMessage { b, _ := json.Marshal(m); return b }
+	long := "Please summarise my story and its arcs. " + strings.Repeat("plan ", 2000) + "Send chunk 1 next."
+	msgs := []json.RawMessage{
+		raw(map[string]any{"role": "system", "content": "sys prompt"}),
+		raw(map[string]any{"role": "user", "content": "Read my book and summarise the red thread."}),
+		raw(map[string]any{"role": "assistant", "content": "<think>secret reasoning</think>Sure, send it."}),
+		raw(map[string]any{"role": "tool", "content": "tool output"}),
+		raw(map[string]any{"role": "assistant", "content": long}),
+	}
+	got := priorTurns(msgs, 8000)
+	for _, want := range []string{"[user]\nRead my book", "summarise the red thread", "Sure, send it.", "Please summarise my story", "Send chunk 1 next.", "[...]"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	for _, bad := range []string{"secret reasoning", "tool output", "sys prompt"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("must leave out %q", bad)
+		}
+	}
+	if strings.Index(got, "Read my book") > strings.Index(got, "Please summarise my story") {
+		t.Error("turns must be in conversation order")
+	}
+	if len(got) > 8000+200 {
+		t.Errorf("len %d over budget", len(got))
+	}
+	// A tight budget keeps the NEWEST turns.
+	tight := priorTurns(msgs, 300)
+	if !strings.Contains(tight, "Send chunk 1 next.") || strings.Contains(tight, "Read my book") {
+		t.Errorf("tight budget must keep the newest turn only, got:\n%s", tight)
+	}
+	if priorTurns(nil, 1000) != "" {
+		t.Error("no prior turns must render empty")
+	}
+}
