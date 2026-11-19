@@ -1734,8 +1734,11 @@ func (tm *turnManager) watchQueue(model string, onStatus func(string, int)) *que
 		return nil
 	}
 	q := &queueWatch{stopCh: make(chan struct{})}
+	// Read once here: the goroutine can outlive the round by a poll, and tests
+	// set these.
+	delay, every := queueLabelDelay, queuePollEvery
 	go func() {
-		t := time.NewTimer(queueLabelDelay)
+		t := time.NewTimer(delay)
 		defer t.Stop()
 		for {
 			select {
@@ -1755,7 +1758,7 @@ func (tm *turnManager) watchQueue(model string, onStatus func(string, int)) *que
 			if stop {
 				return
 			}
-			t.Reset(queuePollEvery)
+			t.Reset(every)
 		}
 	}()
 	return q
