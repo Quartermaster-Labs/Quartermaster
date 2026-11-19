@@ -58,6 +58,11 @@ type Server struct {
 	// sheds idle models under foreign GPU pressure. nil until WireDynamicOffload
 	// runs (hand-written -config, or a build with no perf monitor).
 	vramGuard *vramGuard
+	// demotion checks each loaded model for VRAM that Windows quietly placed in
+	// system memory, and holds that much back on its next placement
+	// (vramdemotion.go). nil until WireDynamicOffload runs; every method is
+	// nil-safe for the readers that run without it.
+	demotion *demotionTracker
 	// offloadSettings is the autogen Settings the spawn-time offload guard and
 	// the vramGuard size against (targetVramGB, overheads, minGpuFraction, the
 	// oomGuard* knobs). Held behind a pointer, NOT captured by value in the
@@ -434,6 +439,8 @@ func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 	s.vramGuard = guard
 	s.local.SetLiveVramBudget(guard.ceilingGB)
 	go guard.run(s.shutdownCtx)
+	s.demotion = newDemotionTracker()
+	s.watchDemotion(s.shutdownCtx)
 
 	s.local.SetSpawnArgs(func(modelID string, args []string) ([]string, error) {
 		logf := func(m string) { s.proxylog.Infof("<%s> %s", modelID, m) }
@@ -467,7 +474,20 @@ func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 			// time. offloadSettingsVal returns a copy, so this is local.
 			sv := s.offloadSettingsVal()
 			sv.Gpus = s.liveGpuSet(sv.MultiGpuEnabled(), sv.DevicePolicy())
-			return autogen.LiveOffloadArgs(sv, args, free, freeOK, logf)
+			// A model whose last load was demoted into system memory is placed
+			// against less than the reading: the reading is what demoted it.
+			placeFree := free
+			if freeOK {
+				if pen := s.demotion.penaltyGB(modelID, free); pen > 0 {
+					placeFree = max(0, free-pen)
+					logf(fmt.Sprintf("dynoffload: free=%.1fGB, holding back %.1fGB (last load was demoted to system memory)", free, pen))
+				}
+			}
+			out, est, err := autogen.LiveOffloadPlan(sv, args, placeFree, freeOK, logf)
+			if err == nil {
+				s.demotion.planned(modelID, est, free)
+			}
+			return out, err
 		}
 		n := 0
 		samplePolicy := s.offloadSettingsVal().DevicePolicy()

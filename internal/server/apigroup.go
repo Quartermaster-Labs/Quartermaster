@@ -81,6 +81,11 @@ type apiModel struct {
 	// edit (new args apply on next load) or a spawn-time offload rewrite, so the
 	// UI shows what the model is REALLY loaded with, not the pending config.
 	RunningCmd string `json:"runningCmd,omitempty"`
+	// DemotedMB is how much of the RUNNING process Windows placed in system memory
+	// instead of VRAM at load (vramdemotion.go). 0 = none detected or not checked.
+	// A demoted model decodes several times slower at long context, so the UI
+	// says so and offers a reload, which is placed with that much less VRAM.
+	DemotedMB int `json:"demotedMB,omitempty"`
 	// PromptEnhancer is the rewrite model this IMAGE model hands its prompt to
 	// before rendering, already joined to its system prompt. nil for every model
 	// that has not opted in, which is all of them by default. The playground
@@ -324,6 +329,7 @@ func (s *Server) modelStatus() []apiModel {
 			EstVramGB:          mc.EstVramGB,
 			EstRamGB:           mc.EstRamGB,
 			RunningCmd:         runningCmd,
+			DemotedMB:          s.demotion.liveMB(id),
 		})
 	}
 
@@ -690,6 +696,7 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 
 	defer event.On(func(e shared.ProcessStateChangeEvent) { sendModels() })()
 	defer event.On(func(e shared.ConfigFileChangedEvent) { sendModels() })()
+	defer event.On(func(e shared.ModelStatusChangedEvent) { sendModels() })()
 	defer event.On(func(e shared.LiveTokensEvent) { sendLiveTokens(e) })()
 
 	// A playground caller subscribes to model status only. It reaches this route

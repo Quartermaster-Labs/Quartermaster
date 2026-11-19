@@ -141,6 +141,10 @@ export interface Model {
   // the config command after a live settings edit (new args apply on next load)
   // or a spawn-time offload rewrite — so the UI shows what's REALLY loaded.
   runningCmd?: string;
+  // MB of the running process that Windows placed in system memory instead of
+  // VRAM at load (server vramdemotion.go). Absent = none detected. A reload is
+  // placed with that much less VRAM, so it lands resident.
+  demotedMB?: number;
 }
 
 export interface TokenMetrics {
