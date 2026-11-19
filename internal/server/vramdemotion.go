@@ -203,7 +203,9 @@ func (s *Server) checkDemotion(ctx context.Context, model string) {
 	}
 	mb := demotedMB(est, ded, sh)
 	if mb < demotionFloorMB {
-		s.proxylog.Debugf("<%s> vram check: %d MB in VRAM, %d MB in system memory, est %.1f GB - resident as planned", model, ded, sh, est)
+		// Info, not Debug: like dynoffload's "baked plan kept" line, a check that
+		// only speaks when it fires cannot be told apart from one that never ran.
+		s.proxylog.Infof("<%s> vram check: %d MB in VRAM, %d MB in system memory, est %.1f GB - resident as planned", model, ded, sh, est)
 		mb = 0
 	} else {
 		s.proxylog.Warnf("<%s> %.1f GB of this model was placed in SYSTEM memory at load (%d MB in VRAM, %d MB shared, est %.1f GB). "+
