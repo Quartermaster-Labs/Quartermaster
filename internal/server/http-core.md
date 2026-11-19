@@ -237,8 +237,11 @@ Five pieces, the first four surfaced through `/api/performance`:
   adapter read 3 GB free). **No pre-load number predicts it**: free VRAM read 20.6 GB against a
   19.5 GB estimate, and DXGI's per-process `Budget` is a near-fixed ~91% slice of the card that does
   not net out other processes (measured 22.3 GB with 19.8 GB already held). So the spawn hook
-  records the estimate it placed against (`autogen.LiveOffloadPlan`), and 3 s after `ready` the
-  process's own PDH counters (`perf.ProcessGpuMemory`) are compared with it. Demoted =
+  records the estimate it placed against (`autogen.LiveOffloadPlan`), and 2 s after the process's
+  FIRST GENERATING REQUEST (first streamed token or first completed request, whichever comes first)
+  its own PDH counters (`perf.ProcessGpuMemory`) are compared with it. Not at `ready`: with
+  `--no-warmup` the graph has not run yet and ~0.75 GB of the 27B is uncommitted (19032 MB at
+  ready+3 s, 19789 MB after a 16-token reply), which read as a false 0.8 GB demotion. Demoted =
   `min(estimate - dedicated, shared)`: the shortfall alone over-reports when the estimate is high
   (mmproj priced at max image size), shared alone over-reports pinned host buffers (0.9 GB is normal
   on the 27B). ≥512 MB is logged as a warning, shown on the model's card as `demotedMB` with a

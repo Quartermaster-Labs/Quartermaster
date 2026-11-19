@@ -25,12 +25,18 @@ import (
 // What the desktop's compositor and a streaming host really pin is not in
 // either number. So the check runs AFTER the load, on the process's own
 // counters, and feeds what it finds back into the next placement of that model.
+//
+// "After the load" means after the first request that generated, not after
+// "ready". Quartermaster starts llama-server with --no-warmup, so at ready the
+// compute graph has never run and part of the footprint is not committed yet:
+// the 27B read 19032 MB in VRAM and 823 MB shared 3 s after ready, and 19789 /
+// 922 after one 16-token reply. Measured at ready, that unfinished footprint
+// against the full estimate looked like 0.8 GB demoted when nothing was.
 
 const (
-	// demotionCheckDelay lets the driver settle the last allocations and PDH
-	// publish them. llama-server allocates weights, KV and compute buffers
-	// before it reports healthy, so "ready" plus a moment is the full footprint.
-	demotionCheckDelay = 3 * time.Second
+	// demotionCheckDelay lets PDH publish the allocations the first generating
+	// request just committed.
+	demotionCheckDelay = 2 * time.Second
 	// demotionFloorMB is the smallest demotion worth reporting. Per-process
 	// counters wobble by tens of MB, and the estimate is a model, not a meter.
 	demotionFloorMB = 512
@@ -66,7 +72,8 @@ type demotionTracker struct {
 	mu      sync.Mutex
 	plans   map[string]demotionPenalty // model -> {est GB, raw free GB} of the last spawn
 	penalty map[string]demotionPenalty
-	live    map[string]int // model -> demoted MB of the process running now
+	live    map[string]int  // model -> demoted MB of the process running now
+	armed   map[string]bool // model -> ready, its first generating request not seen yet
 }
 
 func newDemotionTracker() *demotionTracker {
@@ -74,6 +81,7 @@ func newDemotionTracker() *demotionTracker {
 		plans:   map[string]demotionPenalty{},
 		penalty: map[string]demotionPenalty{},
 		live:    map[string]int{},
+		armed:   map[string]bool{},
 	}
 }
 
@@ -135,14 +143,35 @@ func (d *demotionTracker) measured(model string, mb int) bool {
 	return changed
 }
 
-// stopped forgets the running process's figure; the penalty stays for the
-// next spawn. Reports whether there was anything to forget.
+// arm marks a freshly ready process as owed one check.
+func (d *demotionTracker) arm(model string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.armed[model] = true
+}
+
+// take reports whether model's process is owed its check, and disarms it, so
+// only the first generating request of each process runs one.
+func (d *demotionTracker) take(model string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.armed[model] {
+		return false
+	}
+	delete(d.armed, model)
+	return true
+}
+
+// stopped forgets the running process's figure and any check it was still
+// owed; the penalty stays for the next spawn. Reports whether a visible figure
+// was forgotten.
 func (d *demotionTracker) stopped(model string) bool {
 	if d == nil {
 		return false
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	delete(d.armed, model)
 	_, had := d.live[model]
 	delete(d.live, model)
 	return had
@@ -165,21 +194,43 @@ func (d *demotionTracker) liveMB(model string) int {
 	return d.live[model]
 }
 
-// watchDemotion checks every model that becomes ready and clears the figure of
-// every model that stops. It runs for the server's lifetime.
+// watchDemotion arms a check for every model that becomes ready, runs it on
+// that process's first generating request, and clears the figure of every
+// model that stops. It runs for the server's lifetime.
+//
+// Two signals, whichever comes first: a streamed reply's first token
+// (LiveTokensEvent), so a long digest is checked seconds in rather than when it
+// ends, and any completed request (ActivityLogEvent), which covers non-streamed
+// calls. Both come from the metrics path, which every inference route and the
+// playground's loopback calls pass through.
 func (s *Server) watchDemotion(ctx context.Context) {
-	unsub := event.On(func(e shared.ProcessStateChangeEvent) {
-		if e.NewState == string(process.StateReady) {
-			go s.checkDemotion(ctx, e.ProcessName)
-			return
+	fire := func(model string) {
+		if s.demotion.take(model) {
+			go s.checkDemotion(ctx, model)
 		}
-		if s.demotion.stopped(e.ProcessName) {
-			event.Emit(shared.ModelStatusChangedEvent{Model: e.ProcessName})
-		}
-	})
+	}
+	unsubs := []func(){
+		event.On(func(e shared.ProcessStateChangeEvent) {
+			if e.NewState == string(process.StateReady) {
+				s.demotion.arm(e.ProcessName)
+				return
+			}
+			if s.demotion.stopped(e.ProcessName) {
+				event.Emit(shared.ModelStatusChangedEvent{Model: e.ProcessName})
+			}
+		}),
+		event.On(func(e shared.LiveTokensEvent) {
+			if e.OutputTokens > 0 {
+				fire(e.Model)
+			}
+		}),
+		event.On(func(e ActivityLogEvent) { fire(e.Metrics.Model) }),
+	}
 	go func() {
 		<-ctx.Done()
-		unsub()
+		for _, u := range unsubs {
+			u()
+		}
 	}()
 }
 

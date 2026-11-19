@@ -74,6 +74,27 @@ func TestDemotion_PenaltyAccumulatesAndRetires(t *testing.T) {
 	}
 }
 
+// A process is checked once, on its first generating request; a stop before
+// that request cancels the check.
+func TestDemotion_ArmTakeOnce(t *testing.T) {
+	d := newDemotionTracker()
+	if d.take("m") {
+		t.Error("never-ready model must not be checked")
+	}
+	d.arm("m")
+	if !d.take("m") {
+		t.Error("first request after ready must run the check")
+	}
+	if d.take("m") {
+		t.Error("second request must not run it again")
+	}
+	d.arm("m")
+	d.stopped("m")
+	if d.take("m") {
+		t.Error("a stop must cancel an owed check")
+	}
+}
+
 // Every reader used outside WireDynamicOffload must cope with no tracker.
 func TestDemotion_NilSafe(t *testing.T) {
 	var d *demotionTracker
