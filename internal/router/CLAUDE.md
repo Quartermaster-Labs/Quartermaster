@@ -68,7 +68,8 @@ position means queued, and **0 means promoted out of the queue** (`notifyPositio
 `drainQueue`'s promotion paths). The playground reads it and shows "Waiting its turn"
 (`streamSSE`/`streamRound` in `internal/server/turns.go`); it only appears when the loading
 placeholder runs at all, so a request queued for a model that is *already resident* (concurrency
-limit) still waits silently.
+limit) still waits silently here. The playground covers the common case, a request queued inside
+llama-server's own slots, from its side (`watchQueue`, `internal/server/playground.md`).
 
 **`Effects.Wake` / `Scheduler.OnWake`.** A hold expiring is the only decision the scheduler makes on
 a *wall clock* rather than on an event that arrives by itself. `Wake(d)` arms a timer on the

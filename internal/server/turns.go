@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quartermaster-labs/quartermaster/internal/logmon"
@@ -151,6 +153,11 @@ type turnManager struct {
 	// those exact bytes back instead of a rebuild that differs from them (see
 	// turnsrecord.go). In memory, LRU-bounded; a miss falls back to the rebuild.
 	replays *replayStore
+
+	// slotsFull reports whether every llama-server slot of a model is taken, so
+	// a request sent now queues INSIDE the process (see watchQueue). Set by
+	// Server.SetPlayground; nil until then, and nil means "never say".
+	slotsFull atomic.Pointer[func(model string) bool]
 }
 
 func newTurnManager(pg *Playground, log *logmon.Monitor) *turnManager {
@@ -1637,6 +1644,12 @@ func (tm *turnManager) streamSSE(ctx context.Context, body map[string]any, chatI
 	if err != nil {
 		return "", err
 	}
+	var q *queueWatch
+	if onStatus != nil && onPrefill != nil {
+		model, _ := body["model"].(string)
+		q = tm.watchQueue(model, onStatus)
+		defer q.arrived()
+	}
 	resp, err := tm.client.Do(req)
 	if err != nil {
 		return "", err
@@ -1646,7 +1659,96 @@ func (tm *turnManager) streamSSE(ctx context.Context, body map[string]any, chatI
 		snippet, _ := readLimited(resp.Body, 1<<12)
 		return "", fmt.Errorf("upstream %s: %s", resp.Status, snippet)
 	}
+	if q != nil {
+		resp.Body = &firstReadBody{ReadCloser: resp.Body, fn: q.arrived}
+	}
 	return tm.readSSE(resp, onContent, onReasoning, onTool, onProgress, onStatus, onPrefill)
+}
+
+// A request for a model that is already loaded passes the router at once, so
+// the router's "waiting" frame never comes. If every llama-server slot is busy
+// (with --parallel 1, one other request is enough: another user's turn, a
+// digest, an API client), the request waits INSIDE llama-server, where nothing
+// reports it, and the bubble sits on a spinner for as long as the other
+// request takes, minutes for a long prefill.
+//
+// return_progress makes that wait visible: llama-server sends its first
+// prompt_progress frame the moment a slot takes the request. So a round that
+// asked for it and has received nothing after queueLabelDelay, while the model
+// has more requests in flight than slots, is queued, and gets the same
+// "Waiting its turn" label as a router wait. The round's first byte ends it.
+var (
+	queueLabelDelay = 1500 * time.Millisecond
+	queuePollEvery  = time.Second
+)
+
+type queueWatch struct {
+	mu     sync.Mutex
+	done   bool
+	shown  bool
+	stopCh chan struct{}
+}
+
+// watchQueue starts watching one round. nil (a no-op) when there is no hook.
+func (tm *turnManager) watchQueue(model string, onStatus func(string, int)) *queueWatch {
+	full := tm.slotsFull.Load()
+	if full == nil || model == "" {
+		return nil
+	}
+	q := &queueWatch{stopCh: make(chan struct{})}
+	go func() {
+		t := time.NewTimer(queueLabelDelay)
+		defer t.Stop()
+		for {
+			select {
+			case <-q.stopCh:
+				return
+			case <-t.C:
+			}
+			// Under q.mu, so a label set here happens-before the first frame's
+			// callbacks, which clear it.
+			q.mu.Lock()
+			if !q.done && !q.shown && (*full)(model) {
+				q.shown = true
+				onStatus("waiting", 0)
+			}
+			stop := q.done || q.shown
+			q.mu.Unlock()
+			if stop {
+				return
+			}
+			t.Reset(queuePollEvery)
+		}
+	}()
+	return q
+}
+
+// arrived ends the watch: the round's first byte came, or the round is over.
+func (q *queueWatch) arrived() {
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if !q.done {
+		q.done = true
+		close(q.stopCh)
+	}
+}
+
+// firstReadBody calls fn once, on the first Read that returns data or ends.
+type firstReadBody struct {
+	io.ReadCloser
+	once sync.Once
+	fn   func()
+}
+
+func (b *firstReadBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 || err != nil {
+		b.once.Do(b.fn)
+	}
+	return n, err
 }
 
 // selfCompletionRequest builds the loopback /v1/chat/completions request every

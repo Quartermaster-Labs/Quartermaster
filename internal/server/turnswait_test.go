@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 )
 
 // The router narrates a pre-stream wait in SSE comment frames. streamSSE drops
@@ -115,5 +117,51 @@ func TestStreamSSE_PromptProgress(t *testing.T) {
 	want := []string{"prefill:0/4000", "prefill:2048/4000", "prefill:4000/4000", "status:"}
 	if fmt.Sprint(events) != fmt.Sprint(want) || content != "hi" {
 		t.Errorf("events=%v content=%q, want %v and %q", events, content, want, "hi")
+	}
+}
+
+// A round that llama-server has queued behind another request gets no frame at
+// all until a slot takes it. With the slots full, the watch labels that wait;
+// the first prompt_progress frame (the slot picking the request up) ends it.
+// With a free slot the same silence is something else, and stays unlabelled.
+func TestStreamSSE_QueuedInsideBackend(t *testing.T) {
+	defer func(d, p time.Duration) { queueLabelDelay, queuePollEvery = d, p }(queueLabelDelay, queuePollEvery)
+	queueLabelDelay, queuePollEvery = 20*time.Millisecond, 10*time.Millisecond
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(150 * time.Millisecond) // queued behind another request
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"role":"assistant","content":null}}],"prompt_progress":{"total":3000,"cache":0,"processed":0,"time_ms":0}}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+
+	for _, full := range []bool{true, false} {
+		tm := newTurnTestManager(t)
+		tm.pg.SelfBase = upstream.URL
+		hook := func(model string) bool { return model == "m" && full }
+		tm.slotsFull.Store(&hook)
+
+		var mu sync.Mutex
+		var events []string
+		add := func(e string) { mu.Lock(); events = append(events, e); mu.Unlock() }
+		_, err := tm.streamSSE(context.Background(), map[string]any{"model": "m"}, "c1", "",
+			func(string) {}, nil, nil, nil,
+			func(state string, _ int) { add("status:" + state) },
+			func(done, total int) { add(fmt.Sprintf("prefill:%d/%d", done, total)) })
+		if err != nil {
+			t.Fatalf("streamSSE: %v", err)
+		}
+		want := []string{"prefill:0/3000", "status:"}
+		if full {
+			want = append([]string{"status:waiting"}, want...)
+		}
+		mu.Lock()
+		got := fmt.Sprint(events)
+		mu.Unlock()
+		if got != fmt.Sprint(want) {
+			t.Errorf("slots full=%v: events=%v, want %v", full, got, want)
+		}
 	}
 }

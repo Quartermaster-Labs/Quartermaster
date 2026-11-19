@@ -111,7 +111,13 @@ var mediaNameRe = regexp.MustCompile(`^[0-9a-f]{16}\.[a-z0-9]+$`)
 
 // SetPlayground attaches (or clears) the playground config. Called once at
 // startup and re-attached to each rebuilt server on reload, like AutogenAdmin.
-func (s *Server) SetPlayground(p *Playground) { s.playground = p }
+func (s *Server) SetPlayground(p *Playground) {
+	s.playground = p
+	if p != nil && p.turns != nil && s.local != nil {
+		full := s.slotsFull
+		p.turns.slotsFull.Store(&full)
+	}
+}
 
 // markPlayground tags the request context when it arrived on the playground
 // listen address, so handlePlaygroundMode can report which app to render.

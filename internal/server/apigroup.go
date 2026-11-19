@@ -758,6 +758,34 @@ func perSlotCtx(info *config.CmdInfo) (ctx, slots int) {
 	return ctx, slots
 }
 
+// slotsFull reports whether model has at least as many requests in flight as
+// its llama-server has slots (-np / --parallel), so one more would queue inside
+// the process. A command without the flag answers false: llama-server's own
+// default is not 1, and a non-llama backend batches requests, so an unknown
+// slot count is never reported as full.
+func (s *Server) slotsFull(model string) bool {
+	cfg := s.config()
+	id, ok := cfg.RealModelName(model)
+	if !ok {
+		return false
+	}
+	cmd := cfg.Models[id].Cmd
+	if running, ok := s.local.LaunchedCmd(id); ok && running != "" {
+		cmd = running
+	}
+	v, ok := config.ParseCmd(cmd).Value("-np", "--parallel")
+	if !ok {
+		return false
+	}
+	slots, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || slots < 1 {
+		return false
+	}
+	n, ok := s.local.Inflight(id)
+	// n counts the asking request itself, so "full" is more than slots.
+	return ok && n > int64(slots)
+}
+
 // conversationCtx is perSlotCtx for a model id, read off the command the model
 // is RUNNING under when it is up (a live edit or offload rewrite can differ from
 // the config), else the configured one. 0 = unknown model or no -c flag.

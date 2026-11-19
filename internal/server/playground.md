@@ -135,6 +135,15 @@ up alone (the UI says "Loading model…" from its own residency signal, but only
 text yet — on a later round the digest label below is the one to keep). The first `data:` frame
 clears the label unconditionally: a token ends every wait, and every prefill, by definition.
 
+The router only narrates a wait it can see. A model that is already loaded passes it at once, and if
+every llama-server slot is busy (`--parallel 1`: another user's turn, a digest, an API client) the
+request then queues INSIDE llama-server, silently, for as long as the other request takes. A round
+that asked for `return_progress` covers that: llama-server sends its first `prompt_progress` frame
+the moment a slot takes the request, so `watchQueue` raises the same "Waiting its turn" when no byte
+has arrived after `queueLabelDelay` (1.5 s) and `Server.slotsFull` says the model has more requests
+in flight than `-np` slots. The first byte ends the watch. A command without `-np` is never "full"
+(llama-server's default is not 1, and other backends batch).
+
 ### The digest label ("Reading through the page")
 
 A tool's label comes down the moment the tool returns, but the model then has to **prefill** what it
