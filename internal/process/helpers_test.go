@@ -19,7 +19,17 @@ func skipIfNoSimpleResponder(t *testing.T) {
 	}
 }
 
+// exitWithEnv turns the test binary into a backend that dies at startup: it
+// prints the variable's value to stderr and exits 1, the way llama-server does
+// on a bad argument.
+const exitWithEnv = "QM_TEST_BACKEND_EXIT_WITH"
+
 func TestMain(m *testing.M) {
+	if msg := os.Getenv(exitWithEnv); msg != "" {
+		fmt.Fprintln(os.Stderr, "loading backends")
+		fmt.Fprintln(os.Stderr, msg)
+		os.Exit(1)
+	}
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH
 	if goos == "windows" {

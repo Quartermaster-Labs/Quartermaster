@@ -68,6 +68,17 @@ failed, and returns "" for a healthy binary, a non-PE (every Linux backend), or 
 process that died for any other reason — so an OOM or a bad flag still reads the
 way it did before.
 
+**...and otherwise the backend's own error line** (`exittail.go`). Each launch
+tees stdout/stderr into a fresh 16 KiB `exitTail`; when no DLL/missing-component
+hint applies, `prematureExit` appends `tail.reason()`: the FIRST error-looking
+line in the tail (failures cascade, so the last line is the least specific),
+else the last line. Per-launch on purpose: `processLogger` survives restarts, so
+its history would report an earlier run's error as this one's. Reason: the line
+otherwise lived only in the upstream log, an admin route a remote dashboard gets
+403 on, so a nonexistent `--chat-template-file` surfaced as "unspecific error:
+upstream command exited prematurely" on every request. The line reaches the
+client's 500 body, same as the existing hints.
+
 **Voices path rewrite is engine-specific.** The proxy `Director` maps `/v1/audio/voices[/{name}]` → `/v1/voices[/{name}]` for qwentts.cpp, whose tts-server hosts voices there. `rewritesVoicesPath(args)` suppresses it when argv carries `--model-path` (mmwillet/TTS.cpp) — that engine ships a binary with the *same name* but serves `/v1/audio/voices` itself, so the rewrite 404s and the Speech tab silently shows only the default speaker. The model flag is the only discriminator; the exe name is not.
 
 **Spawn-time argv rewrite (`SetSpawnArgs`).** `doStart` rewrites the argv after `SanitizedCommand()` and before exec via the optional `spawnArgs` hook (atomic, mirrors `SetPreStop`/`SetPostStart`; fanned out per-model by `baseRouter.SetSpawnArgs`). A returned error **aborts the start** (→ `startResult{err}` → `StateStopped`, refused not crashed). The live consumer is `server.WireDynamicOffload` → `autogen.LiveOffloadArgs`, which recomputes `-ngl`/`--n-cpu-moe` from free VRAM so a stale baked plan can't OOM (see `internal/autogen/CLAUDE.md`). This is the realized form of the old "resolve `${NGL}/${NCPUMOE}` at spawn" goal — done by editing the concrete flags, not macros (config rejects unresolved `${...}` at load). Context size is still baked per-profile.

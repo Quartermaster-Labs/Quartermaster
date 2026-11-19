@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -625,8 +626,12 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	cmdCtx, cmdCancel := context.WithCancel(context.Background())
 	resolvedExe := resolveExe(args[0])
 	cmd := exec.CommandContext(cmdCtx, resolvedExe, args[1:]...)
-	cmd.Stderr = p.processLogger
-	cmd.Stdout = p.processLogger
+	// One writer value for both streams: exec shares a single pipe when Stdout
+	// and Stderr compare equal, which keeps the two interleaved in order.
+	tail := &exitTail{}
+	out := io.MultiWriter(p.processLogger, tail)
+	cmd.Stderr = out
+	cmd.Stdout = out
 	cmd.Dir = spawnDir()
 	cmd.Env = append(cmd.Environ(), cfg.Env...)
 	// Self-contained backends (Vulkan/ROCm bundles) need their own directory
@@ -701,6 +706,15 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		// generator already knew, so say it again at the point of failure.
 		if missingNote != "" {
 			return startResult{err: fmt.Errorf("upstream command exited prematurely: %s", missingNote)}
+		}
+		// Otherwise the backend usually said why on its way out ("failed to
+		// open file ...", "cudaMalloc failed: out of memory"), but only into the
+		// upstream log, which a remote dashboard cannot read (admin route). The
+		// request that triggered the load got "unspecific error" instead.
+		// prematureExit runs after cmdDone, i.e. after Wait drained the pipes,
+		// so the tail is complete here.
+		if reason := tail.reason(); reason != "" {
+			return startResult{err: fmt.Errorf("upstream command exited prematurely: %s", reason)}
 		}
 		return startResult{err: fmt.Errorf("upstream command exited prematurely")}
 	}
