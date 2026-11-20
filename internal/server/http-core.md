@@ -242,9 +242,12 @@ Five pieces, the first four surfaced through `/api/performance`:
   its own PDH counters (`perf.ProcessGpuMemory`) are compared with it. Not at `ready`: with
   `--no-warmup` the graph has not run yet and ~0.75 GB of the 27B is uncommitted (19032 MB at
   ready+3 s, 19789 MB after a 16-token reply), which read as a false 0.8 GB demotion. Demoted =
-  `min(estimate - dedicated, shared)`: the shortfall alone over-reports when the estimate is high
-  (mmproj priced at max image size), shared alone over-reports pinned host buffers (0.9 GB is normal
-  on the 27B). ≥512 MB is logged as a warning, shown on the model's card as `demotedMB` with a
+  `min(estimate - dedicated, shared - estRam)`: the shortfall alone over-reports when the estimate
+  is high (mmproj priced at max image size), shared alone over-reports pinned host buffers (0.9 GB
+  is normal on the 27B), and a PARTIAL placement's CPU layers are pinned host buffers too, so the
+  plan's own `EstRamGB` is netted out of shared. Without that every partial load read as demoted and
+  the check fed itself (2026-11-20: shared was exactly the baseline plus the 9/15/13 CPU layers; the
+  hold-back climbed 2.0 -> 3.8 -> 5.7 GB and a reload with 20.9 GB free placed 15 GB). ≥512 MB is logged as a warning, shown on the model's card as `demotedMB` with a
   Reload button, and held back from free VRAM on that model's next placement, cumulatively. The
   penalty retires itself once the raw free reading rises by its size (whatever pinned the hidden
   VRAM left), and a restart forgets it. Windows only; `ProcessGpuMemory` is `ok=false` elsewhere.

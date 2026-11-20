@@ -31,13 +31,46 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 	return args, err
 }
 
-// LiveOffloadPlan is LiveOffloadArgs plus the VRAM footprint (GB) the returned
-// argv was placed against. The estimate is 0 whenever no llama.cpp placement
-// ran (sd-server, SAM, a non-gguf command, an unreadable gguf, no telemetry),
+// PlacedEstimate is the footprint a launched argv was placed against: VramGB on
+// the card, RamGB deliberately left in host memory (CPU layers, CPU experts).
+// The zero value means no llama.cpp placement ran.
+type PlacedEstimate struct {
+	VramGB float64
+	RamGB  float64
+}
+
+func placedOf(res EstimateResult) PlacedEstimate {
+	return PlacedEstimate{VramGB: res.EstVramGB, RamGB: res.EstRamGB}
+}
+
+// placedAtBaked is the footprint of the BAKED placement when the guard keeps it.
+// res is the live plan, which may put more on the GPU than the baked flags do
+// (a pinned cpuOffload, a config baked against a smaller card), and the demotion
+// check compares the launch against this figure: res would overstate VRAM and
+// understate the host share, and a partial launch would read as demoted.
+func placedAtBaked(s Settings, meta Metadata, in EstimateInput, res EstimateResult, bakedNgl, bakedNcpu int) PlacedEstimate {
+	if res.Ngl <= bakedNgl && res.NCpuMoe >= bakedNcpu {
+		return placedOf(res)
+	}
+	n := bakedNcpu
+	if !meta.IsMoE {
+		n = max(0, int(meta.BlockCount)-bakedNgl)
+	}
+	in.CpuOffload, in.CpuOffloadSet = n, true
+	at, err := EstimatePlan(s, meta, in)
+	if err != nil {
+		return placedOf(res)
+	}
+	return placedOf(at)
+}
+
+// LiveOffloadPlan is LiveOffloadArgs plus the footprint the returned argv was
+// placed against. The estimate is zero whenever no llama.cpp placement ran
+// (sd-server, SAM, a non-gguf command, an unreadable gguf, no telemetry),
 // which callers read as "nothing to compare the load against".
-func LiveOffloadPlan(s Settings, args []string, freeGB float64, freeOK bool, logf func(string)) ([]string, float64, error) {
+func LiveOffloadPlan(s Settings, args []string, freeGB float64, freeOK bool, logf func(string)) ([]string, PlacedEstimate, error) {
 	if !freeOK {
-		return args, 0, nil // no reading -> trust the baked plan
+		return args, PlacedEstimate{}, nil // no reading -> trust the baked plan
 	}
 
 	// sd-server (image gen) has no -m gguf and no -ngl; its only VRAM knob is
@@ -47,7 +80,7 @@ func LiveOffloadPlan(s Settings, args []string, freeGB float64, freeOK bool, log
 	// baked value (never raise): ample free leaves the safe baked budget alone,
 	// and a hand-pinned vramTargetGB stays respected.
 	if maxVram, idx := argVal(args, "--max-vram"); idx >= 0 {
-		return liveMaxVram(args, idx, maxVram, freeGB, logf), 0, nil
+		return liveMaxVram(args, idx, maxVram, freeGB, logf), PlacedEstimate{}, nil
 	}
 
 	model, _ := argVal(args, "-m", "--model")
@@ -64,24 +97,24 @@ func LiveOffloadPlan(s Settings, args []string, freeGB float64, freeOK bool, log
 	// (CUDA, or a fixed Vulkan/ROCm build) is ever wired for SAM.
 	if strings.HasSuffix(lower, ".ggml") {
 		if hasFlag(args, "--no-gpu") {
-			return args, 0, nil
+			return args, PlacedEstimate{}, nil
 		}
 		out := append(append([]string(nil), args...), "--no-gpu")
 		if logf != nil {
 			logf("dynoffload: sam -> --no-gpu (Vulkan SAM inference is numerically broken; CPU only)")
 		}
-		return out, 0, nil
+		return out, PlacedEstimate{}, nil
 	}
 
 	if !strings.HasSuffix(lower, ".gguf") {
-		return args, 0, nil // not a llama.cpp model load (sd-server, custom cmd, …)
+		return args, PlacedEstimate{}, nil // not a llama.cpp model load (sd-server, custom cmd, …)
 	}
 	if dev, i := argVal(args, "--device", "-dev"); i >= 0 && strings.EqualFold(dev, "none") {
-		return args, 0, nil // CPU-device pin: no GPU placement to retune
+		return args, PlacedEstimate{}, nil // CPU-device pin: no GPU placement to retune
 	}
 	nglStr, nglIdx := argVal(args, "-ngl", "--n-gpu-layers", "--gpu-layers")
 	if nglIdx < 0 {
-		return args, 0, nil // no offload knob to tune
+		return args, PlacedEstimate{}, nil // no offload knob to tune
 	}
 	bakedNgl, _ := strconv.Atoi(nglStr)
 	ncStr, ncIdx := argVal(args, "--n-cpu-moe")
@@ -95,7 +128,7 @@ func LiveOffloadPlan(s Settings, args []string, freeGB float64, freeOK bool, log
 		if logf != nil {
 			logf(fmt.Sprintf("dynoffload: gguf read failed (%v); using baked flags", err))
 		}
-		return args, 0, nil
+		return args, PlacedEstimate{}, nil
 	}
 
 	// Budget = the TIGHTER of live free and the configured target. Live free is a
@@ -185,14 +218,14 @@ func LiveOffloadPlan(s Settings, args []string, freeGB float64, freeOK bool, log
 		if logf != nil {
 			logf(fmt.Sprintf("dynoffload: estimate failed (%v); using baked flags", err))
 		}
-		return args, 0, nil
+		return args, PlacedEstimate{}, nil
 	}
 
 	// EstVramGB already folds in the overhead/compute reserve, so it IS the live
 	// footprint. The planner already maxed out offload to fit; if it still can't,
 	// even a fully CPU-offloaded load would OOM -> refuse.
 	if res.EstVramGB > freeGB {
-		return nil, 0, fmt.Errorf("insufficient VRAM to load %s: needs ~%.1fGB at max CPU offload but only %.1fGB free - close other GPU apps and retry",
+		return nil, PlacedEstimate{}, fmt.Errorf("insufficient VRAM to load %s: needs ~%.1fGB at max CPU offload but only %.1fGB free - close other GPU apps and retry",
 			filepath.Base(model), res.EstVramGB, freeGB)
 	}
 
@@ -207,8 +240,16 @@ func LiveOffloadPlan(s Settings, args []string, freeGB float64, freeOK bool, log
 		if _, ctxIdx := argVal(args, "-c", "--ctx-size"); ctxIdx >= 0 {
 			if ctx, trimmed, ok := trimCtxForPlacement(s, meta, in, argSlots(args), bakedNgl, bakedNcpu); ok {
 				if logf != nil {
-					logf(fmt.Sprintf("dynoffload: free=%.1fGB -> -c %d->%d instead of -ngl %d->%d (est %.1fGB)",
-						freeGB, in.Ctx, ctx, bakedNgl, res.Ngl, trimmed.EstVramGB))
+					if trimmed.Ngl >= bakedNgl && trimmed.NCpuMoe <= bakedNcpu {
+						logf(fmt.Sprintf("dynoffload: free=%.1fGB -> -c %d->%d instead of -ngl %d->%d (est %.1fGB)",
+							freeGB, in.Ctx, ctx, bakedNgl, res.Ngl, trimmed.EstVramGB))
+					} else {
+						// Auto window at the sizer's minimum and STILL short: the
+						// placement rewrite below spills from this window, not the
+						// baked one.
+						logf(fmt.Sprintf("dynoffload: free=%.1fGB -> auto -c %d->%d (sizer minimum), still short of the baked placement",
+							freeGB, in.Ctx, ctx))
+					}
 				}
 				args = rewriteCtx(args, ctxIdx, ctx)
 				in.Ctx, res = ctx, trimmed
@@ -226,7 +267,7 @@ func LiveOffloadPlan(s Settings, args []string, freeGB float64, freeOK bool, log
 		live := gpuResidentFraction(meta, res.Ngl, res.NCpuMoe)
 		baked := gpuResidentFraction(meta, bakedNgl, bakedNcpu)
 		if live < s.MinGpuFraction && baked >= s.MinGpuFraction {
-			return nil, 0, fmt.Errorf("refusing to load %s: only %.0f%% of it would fit on the GPU right now (%.1fGB free, floor %.0f%%) - it would run at CPU speed; free VRAM or unload another model first",
+			return nil, PlacedEstimate{}, fmt.Errorf("refusing to load %s: only %.0f%% of it would fit on the GPU right now (%.1fGB free, floor %.0f%%) - it would run at CPU speed; free VRAM or unload another model first",
 				filepath.Base(model), live*100, freeGB, s.MinGpuFraction*100)
 		}
 	}
@@ -242,7 +283,7 @@ func LiveOffloadPlan(s Settings, args []string, freeGB float64, freeOK bool, log
 			logf(fmt.Sprintf("dynoffload: free=%.1fGB est=%.1fGB -> baked plan kept (-ngl %d --n-cpu-moe %d)",
 				freeGB, res.EstVramGB, bakedNgl, bakedNcpu))
 		}
-		return retuneTensorSplit(s, args, res.FixedGB, logf), res.EstVramGB, nil
+		return retuneTensorSplit(s, args, res.FixedGB, logf), placedAtBaked(s, meta, in, res, bakedNgl, bakedNcpu), nil
 	}
 
 	out := retuneTensorSplit(s, rewriteOffload(args, nglIdx, ncIdx, res.Ngl, res.NCpuMoe), res.FixedGB, logf)
@@ -250,7 +291,7 @@ func LiveOffloadPlan(s Settings, args []string, freeGB float64, freeOK bool, log
 		logf(fmt.Sprintf("dynoffload: free=%.1fGB -> -ngl %d->%d --n-cpu-moe %d->%d (est %.1fGB)",
 			freeGB, bakedNgl, res.Ngl, bakedNcpu, res.NCpuMoe, res.EstVramGB))
 	}
-	return out, res.EstVramGB, nil
+	return out, placedOf(res), nil
 }
 
 // retuneTensorSplit rewrites a baked --tensor-split (and its --main-gpu) from
@@ -435,6 +476,14 @@ const ctxTrimFloorFrac = 0.6
 // pool), so the step is scaled by the slot count: anything else would leave slots
 // holding a non-multiple of the 4096 block the sizer rounds to, and the next
 // probe would re-round to the same place and loop without progress.
+//
+// s.CtxAuto (the sizer picked this window, nobody asked for it) lowers the floor
+// to the sizer's own minimum, and when even that cannot keep the baked placement
+// it still returns the SMALLEST window probed, whose estimate then carries a
+// worse placement: the caller spills from there. An auto window is a guess from
+// the generate-time budget, and when that budget was wrong (a pinned
+// targetVramGB above what the desktop leaves free) the 60% floor turned a 262k
+// guess into 20 dense layers spilled to CPU while keeping the whole 262k.
 func trimCtxForPlacement(s Settings, meta Metadata, in EstimateInput, slots, bakedNgl, bakedNcpu int) (int, EstimateResult, bool) {
 	if in.Ctx <= 0 {
 		return 0, EstimateResult{}, false
@@ -444,7 +493,15 @@ func trimCtxForPlacement(s Settings, meta Metadata, in EstimateInput, slots, bak
 	}
 	step := 4096 * slots
 	floor := int(float64(in.Ctx) * ctxTrimFloorFrac)
+	if s.CtxAuto {
+		minCtx := s.DenseMinCtx
+		if minCtx <= 0 {
+			minCtx = 32768
+		}
+		floor = min(floor, minCtx*slots)
+	}
 	probe := in
+	lastCtx, last := 0, EstimateResult{}
 	for ctx := in.Ctx - step; ctx >= step && ctx >= floor; ctx -= step {
 		probe.Ctx = ctx
 		res, err := EstimatePlan(s, meta, probe)
@@ -454,6 +511,10 @@ func trimCtxForPlacement(s Settings, meta Metadata, in EstimateInput, slots, bak
 		if res.Ngl >= bakedNgl && res.NCpuMoe <= bakedNcpu {
 			return ctx, res, true
 		}
+		lastCtx, last = ctx, res
+	}
+	if s.CtxAuto && lastCtx > 0 {
+		return lastCtx, last, true
 	}
 	return 0, EstimateResult{}, false
 }

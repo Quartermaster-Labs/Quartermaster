@@ -51,6 +51,15 @@ and spills as before.
   the block the sizer rounds to.
 - `ctxTrimFloorFrac` (0.6) bounds the trim. Below ~60% of the configured window the *window* is
   the thing the user notices, and spilling a layer becomes the better trade again.
+- **Except for an auto window.** A profile whose `-c` the sizer picked (no `Override.Ctx`, ctx
+  tier, variant ctx or `-c` pin) is emitted with `ctxAuto: true`; the spawn hook copies it onto
+  `Settings.CtxAuto`. Then the floor drops to `DenseMinCtx` (x slots), and if even that cannot
+  keep the baked placement the smallest probed window is returned anyway, so the spill is costed
+  at that window rather than at the full one. Why: an auto window is a guess from the
+  generate-time budget, and a `targetVramGB` pinned above what the desktop leaves free bakes a
+  window the card never had. Measured 2026-11-19: auto 262k on a 27B dense, 16.6 GB live
+  budget, the 0.6 floor (157k) refused the trim and the guard spilled 20 of 65 layers while
+  KEEPING all 262k. A hand-written config has no `ctxAuto` and keeps the 60% floor.
 - The trim runs **before** the `minGpuFraction` refusal, so trimming can also rescue a load that
   would otherwise be refused outright.
 - Only the argv is rewritten. The config keeps its full window, so the next spawn gets it back

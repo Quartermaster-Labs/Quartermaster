@@ -133,6 +133,11 @@ type Settings struct {
 	// not the user's intent, and a stale copy in a config file would size a plan
 	// for hardware that is no longer there.
 	Gpus GpuSet `yaml:"-"`
+	// CtxAuto is set by the spawn hook on its private copy, from the launching
+	// model's config.ModelConfig.CtxAuto: the -c in this argv was the sizer's
+	// pick, not the user's, so LiveOffloadPlan may trim it below the 60% floor
+	// (down to DenseMinCtx) before spilling a layer. Never serialised.
+	CtxAuto bool `yaml:"-"`
 	// ComputeBufFactor scales the modeled compute buffer (logits + activations).
 	// 1.0 = the analytic estimate; tune against the "compute buffer size" llama
 	// prints at load if your build/arch differs. 0 => default 1.0. Measure PEAK

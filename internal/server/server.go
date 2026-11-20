@@ -474,6 +474,9 @@ func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 			// time. offloadSettingsVal returns a copy, so this is local.
 			sv := s.offloadSettingsVal()
 			sv.Gpus = s.liveGpuSet(sv.MultiGpuEnabled(), sv.DevicePolicy())
+			// An auto-sized window may be trimmed further than a chosen one
+			// before a layer is spilled (autogen.trimCtxForPlacement).
+			sv.CtxAuto = s.config().Models[modelID].CtxAuto
 			// A model whose last load was demoted into system memory is placed
 			// against less than the reading: the reading is what demoted it.
 			placeFree := free
@@ -485,7 +488,7 @@ func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 			}
 			out, est, err := autogen.LiveOffloadPlan(sv, args, placeFree, freeOK, logf)
 			if err == nil {
-				s.demotion.planned(modelID, est, free)
+				s.demotion.planned(modelID, est.VramGB, est.RamGB, free)
 			}
 			return out, err
 		}

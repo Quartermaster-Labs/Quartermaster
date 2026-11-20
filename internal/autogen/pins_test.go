@@ -337,3 +337,23 @@ func firstEstVram(t *testing.T, out string) float64 {
 	}
 	return f
 }
+
+// ctxAuto marks the windows the sizer picked, which the spawn guard may trim
+// below its 60% floor; a window anyone pinned must not carry it.
+func TestEmitProfile_ctxAutoOnlyForSizerWindows(t *testing.T) {
+	meta := pinsTestMeta()
+	s := Settings{TargetVramGB: 40, VramOverheadGB: 1, ComputeBufFactor: 1}
+	s.applyDefaults()
+	row := GgufRow{ID: "m", FullPath: "m.gguf"}
+	emit := func(prof profile) string {
+		var b strings.Builder
+		emitProfile(&b, s, meta, row, prof, 32768, 99, 0, LoadPlan{EstVramGB: 10}, "f16", "f16", false, &Override{})
+		return b.String()
+	}
+	if out := emit(profile{Name: "m"}); !strings.Contains(out, "\n    ctxAuto: true\n") {
+		t.Fatalf("auto profile missing ctxAuto:\n%s", out)
+	}
+	if out := emit(profile{Name: "m-32k", Ctx: 32768}); strings.Contains(out, "ctxAuto") {
+		t.Fatalf("pinned profile carries ctxAuto:\n%s", out)
+	}
+}
