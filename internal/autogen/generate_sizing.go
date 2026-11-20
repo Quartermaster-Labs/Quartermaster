@@ -420,13 +420,8 @@ func estForOffload(meta Metadata, prof profile, kvReserve, ckptGB float64, ngl, 
 		estRam = size * share * (float64(ncpuMoe) / blocks)
 		return round(estVram, 2), round(estRam, 2)
 	}
-	gpuFrac := float64(ngl) / blocks
-	if gpuFrac > 1 {
-		gpuFrac = 1
-	}
-	estVram = gpuFrac*(size+kvReserve+ckptGB) + overhead
-	estRam = (1 - gpuFrac) * (size + kvReserve + ckptGB)
-	return round(estVram, 2), round(estRam, 2)
+	estVram, estRam = denseCost(size, meta.IoWeightsGB, kvReserve+ckptGB, ngl, int(blocks))
+	return round(estVram+overhead, 2), round(estRam, 2)
 }
 
 // Empirical compute-graph constants. With flash attention on (the default), the

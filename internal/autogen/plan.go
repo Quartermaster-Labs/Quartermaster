@@ -73,11 +73,27 @@ type PlanOptions struct {
 // drove ngl toward 0 while the reserved VRAM sat unused (e.g. a 24B dense at 64k
 // ctx pinned to -ngl 0 on a 7GB budget). Diverges from the PowerShell
 // Get-LlamaLoadPlan, which shares the same flaw.
-func densePlacement(size, kvReserve float64, blocks int, target, cudaOverhead float64) (ngl int, estVram, estRam float64) {
-	perLayer := (size + kvReserve) / float64(blocks)
+//
+// ioGB (Metadata.IoWeightsGB) is the input embedding plus the output head. They
+// belong to no block, so -ngl does not move them with the layers: llama.cpp
+// keeps token_embd on the CPU always and puts the output head on the GPU only
+// when ngl exceeds blocks. A partial placement (ngl <= blocks) therefore carries
+// only the repeating layers' share of the file in VRAM, and both io tensors sit
+// in host memory. Spreading the whole file across the blocks overcharged the
+// 27B (1.64 GB of io weights) by ~1.4 GB at -ngl 56, so the guard spilled
+// layers that fit. ngl > blocks is the whole-model placement and keeps the
+// whole-file costing its calibration was measured on. ioGB 0 (unknown) is the
+// old costing exactly.
+func densePlacement(size, ioGB, kvReserve float64, blocks int, target, cudaOverhead float64) (ngl int, estVram, estRam float64) {
+	layers := size - max(ioGB, 0)
 	budget := target - cudaOverhead
-	if perLayer > 0 && budget > 0 {
+	if perLayer := (layers + kvReserve) / float64(blocks); perLayer > 0 && budget > 0 {
 		ngl = int(math.Floor(budget / perLayer))
+	}
+	// Past blocks the head comes onto the GPU too: only take that step on the
+	// whole-file rule it was always placed by.
+	if ngl > blocks && ioGB > 0 && budget < (size+kvReserve)*float64(blocks+1)/float64(blocks) {
+		ngl = blocks
 	}
 	if ngl > blocks+1 {
 		ngl = blocks + 1
@@ -85,13 +101,23 @@ func densePlacement(size, kvReserve float64, blocks int, target, cudaOverhead fl
 	if ngl < 0 {
 		ngl = 0
 	}
-	gpuFrac := float64(ngl) / float64(blocks)
-	if gpuFrac > 1 {
-		gpuFrac = 1
-	}
-	estVram = gpuFrac*(size+kvReserve) + cudaOverhead
-	estRam = (1 - gpuFrac) * (size + kvReserve)
+	estVram, estRam = denseCost(size, ioGB, kvReserve, ngl, blocks)
+	estVram += cudaOverhead
 	return
+}
+
+// denseCost splits a dense placement's weights and per-layer reserve (KV, plus
+// checkpoints for the callers that fold them in) between VRAM and host RAM for
+// -ngl ngl. See densePlacement for why the io weights are carved out below
+// blocks+1.
+func denseCost(size, ioGB, perLayerReserve float64, ngl, blocks int) (vram, ram float64) {
+	if ngl > blocks {
+		return size + perLayerReserve, 0
+	}
+	io := max(ioGB, 0)
+	gpuFrac := max(float64(ngl), 0) / float64(blocks)
+	layers := size - io + perLayerReserve
+	return gpuFrac * layers, (1-gpuFrac)*layers + io
 }
 
 // GetLoadPlan derives -ngl and --n-cpu-moe from a VRAM budget and gguf metadata.
@@ -140,7 +166,7 @@ func GetLoadPlan(meta Metadata, opt PlanOptions) (LoadPlan, error) {
 		usableForExperts := usableVram - nonExpertTotal
 		if usableForExperts <= 0 {
 			// Dense path can't even fit; fall back to -ngl reduction.
-			ngl, estVram, estRam = densePlacement(size, kvReserve, blocks, opt.TargetVramGB, cudaOverhead)
+			ngl, estVram, estRam = densePlacement(size, meta.IoWeightsGB, kvReserve, blocks, opt.TargetVramGB, cudaOverhead)
 			ncpuMoe = 0
 			reasons = append(reasons, fmt.Sprintf("MoE share=%.2f but non-expert weight %.2fGB exceeds usable VRAM -> dense fallback -ngl=%d", share, nonExpertTotal, ngl))
 		} else {
@@ -156,7 +182,7 @@ func GetLoadPlan(meta Metadata, opt PlanOptions) (LoadPlan, error) {
 			// naive -ngl (one boundary transition) wins.
 			crossoverFrac := 0.5
 			if float64(ncpuMoeCandidate) > float64(blocks)*crossoverFrac {
-				ngl, estVram, estRam = densePlacement(size, kvReserve, blocks, opt.TargetVramGB, cudaOverhead)
+				ngl, estVram, estRam = densePlacement(size, meta.IoWeightsGB, kvReserve, blocks, opt.TargetVramGB, cudaOverhead)
 				ncpuMoe = 0
 				reasons = append(reasons, fmt.Sprintf("MoE share=%.2f but ncpumoe candidate %d/%d exceeds %.0f%% crossover -> naive -ngl=%d (avoid PCIe thrash)", share, ncpuMoeCandidate, blocks, crossoverFrac*100, ngl))
 			} else {
@@ -170,7 +196,7 @@ func GetLoadPlan(meta Metadata, opt PlanOptions) (LoadPlan, error) {
 		}
 
 	default:
-		ngl, estVram, estRam = densePlacement(size, kvReserve, blocks, opt.TargetVramGB, cudaOverhead)
+		ngl, estVram, estRam = densePlacement(size, meta.IoWeightsGB, kvReserve, blocks, opt.TargetVramGB, cudaOverhead)
 		ncpuMoe = 0
 		reasons = append(reasons, fmt.Sprintf("dense per_layer=%.3fGB(w)+%.3fGB(kv) -> -ngl=%d/%d", size/float64(blocks), kvReserve/float64(blocks), ngl, blocks))
 	}

@@ -186,6 +186,17 @@ derived from the tensor section, using the arch table only when that is 0.
 `plan.go`'s `densePlacement` **intentionally diverges** from the PowerShell original
 (it fixes a per-layer KV-reserve bug) — see the comment at `plan.go`.
 
+**A partial dense placement does not carry the io weights.** `token_embd.weight` and
+`output.weight` belong to no block: llama.cpp keeps the embedding on the CPU always and moves
+the output head to the GPU only when `-ngl` exceeds `block_count`. So for `-ngl <= blocks`,
+`denseCost` (shared by `densePlacement` and `estForOffload`) spreads only
+`FileSizeGB - IoWeightsGB` across the blocks and books the io pair as host RAM. On the 248k-vocab
+27B the pair is 1.64 GB, and charging it as a share of the file put three measured loads
+(`-ngl 56/50/52`) ~1.9 GB over their real dedicated VRAM, so the spawn guard spilled layers
+that fit. `-ngl > blocks` (whole model) keeps whole-file costing because its ctx constants were
+calibrated at `-ngl 99`, and `densePlacement` takes that last step only where the whole-file
+rule allows it. `IoWeightsGB == 0` (unsized) reproduces the old costing exactly.
+
 ## KV quant
 
 **Defaults to `f16`, steps down only under VRAM pressure.** `defaultKvQuant` (`kvcost.go`)

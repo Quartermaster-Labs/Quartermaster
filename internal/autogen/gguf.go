@@ -151,6 +151,17 @@ type Metadata struct {
 	SsmConvKernel    int64
 	SsmStateSize     int64
 
+	// IoWeightsGB is the size of token_embd.weight plus output.weight (GiB, same
+	// unit as FileSizeGB): the weights a dense -ngl below block_count+1 leaves
+	// OFF the GPU. llama.cpp always keeps the input embedding on the CPU (it is a
+	// row lookup, not a matmul) and puts the output head on the GPU only when
+	// -ngl exceeds block_count. On a 248k-vocab 27B the pair is ~1.9 GB, which
+	// the partial-placement estimate used to charge to VRAM as a share of the
+	// whole file. 0 when unknown, which keeps the old whole-file costing. Read
+	// off shard 1 of a split set only, so an output head stored in a later shard
+	// is missed; that errs toward the old, higher estimate.
+	IoWeightsGB float64
+
 	// VocabSize is the token vocabulary size, derived from the token_embd.weight
 	// (or output.weight) tensor shape / embedding_length. 0 when unsizable. Used
 	// to size the logits/output compute buffer in the VRAM estimate.
@@ -1103,6 +1114,7 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 	m := Metadata{
 		Path:              path,
 		FileSizeGB:        round(float64(sizeBytes)/gib, 3),
+		IoWeightsGB:       round(float64(scan.ioBytes)/gib, 3),
 		Architecture:      arch,
 		GeneralType:       genType,
 		BlockCount:        deref(blockCount),
@@ -1176,7 +1188,7 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 // i.e. it's a full checkpoint rather than a bare UNet.
 func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err error) {
 	var share float64
-	var vocabElems int64
+	var vocabElems, ioBytes int64
 	var diffKind string
 	var bakedEnc bool
 	var expertBytes, totalBytes int64
@@ -1189,7 +1201,7 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 	typeBytes := map[uint32]int64{}
 	var paramCount int64
 	out := func() tensorScan {
-		return tensorScan{expertShare: share, vocabElems: vocabElems, diffKind: diffKind, bakedEnc: bakedEnc, condHidden: condHiddenFrom(condDims), videoKind: videoKind, hasAudioOut: sawAudioPatch, embedWidth: embedWidth, typeBytes: typeBytes, paramCount: paramCount}
+		return tensorScan{expertShare: share, vocabElems: vocabElems, ioBytes: ioBytes, diffKind: diffKind, bakedEnc: bakedEnc, condHidden: condHiddenFrom(condDims), videoKind: videoKind, hasAudioOut: sawAudioPatch, embedWidth: embedWidth, typeBytes: typeBytes, paramCount: paramCount}
 	}
 	for i := uint64(0); i < tensorCount; i++ {
 		name, err := r.str()
@@ -1232,6 +1244,9 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 			typeBytes[typ] += bytes
 			if strings.Contains(name, "_exps") {
 				expertBytes += bytes
+			}
+			if name == "token_embd.weight" || name == "output.weight" {
+				ioBytes += bytes
 			}
 		} else {
 			unknownType = true
