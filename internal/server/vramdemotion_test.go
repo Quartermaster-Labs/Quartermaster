@@ -8,18 +8,26 @@ import "testing"
 func TestDemotion_DemotedMB(t *testing.T) {
 	cases := []struct {
 		name     string
-		est      float64
+		est, ram float64
 		ded, sh  int
 		want     int
 		reported bool
 	}{
-		{"demoted at load", 19.52, 18063, 2765, 1925, true},
-		{"healthy: estimate a little high, under the floor", 19.52, 19808, 922, 180, false},
-		{"estimate too high, nothing in shared", 12.0, 1200, 300, 300, false},
-		{"loaded MORE than estimated", 10.0, 11000, 900, 0, false},
+		{"demoted at load", 19.52, 0, 18063, 2765, 1925, true},
+		{"healthy: estimate a little high, under the floor", 19.52, 0, 19808, 922, 180, false},
+		{"estimate too high, nothing in shared", 12.0, 0, 1200, 300, 300, false},
+		{"loaded MORE than estimated", 10.0, 0, 11000, 900, 0, false},
+		// 2026-11-20, dense 27B q4_k_p partially offloaded: shared is the
+		// baseline plus the CPU layers' pinned weights, not a demotion. Before
+		// the host share was netted out these read 2025/1901/1993 MB demoted.
+		{"partial -ngl 56: CPU layers in shared", 18.3, 3.0, 16714, 3344, 272, false},
+		{"partial -ngl 50: CPU layers in shared", 16.3, 5.0, 14790, 4760, 0, false},
+		{"partial -ngl 52: CPU layers in shared", 16.9, 4.34, 15313, 4290, 0, false},
+		// A real demotion on a partial load still shows past the planned share.
+		{"partial load, also demoted", 16.0, 2.0, 14000, 4100, 2052, true},
 	}
 	for _, c := range cases {
-		got := demotedMB(c.est, c.ded, c.sh)
+		got := demotedMB(c.est, c.ram, c.ded, c.sh)
 		if got != c.want {
 			t.Errorf("%s: demotedMB = %d, want %d", c.name, got, c.want)
 		}
@@ -33,7 +41,7 @@ func TestDemotion_PenaltyAccumulatesAndRetires(t *testing.T) {
 	d := newDemotionTracker()
 	const m = "qwen"
 
-	d.planned(m, 19.5, 20.6)
+	d.planned(m, 19.5, 0, 20.6)
 	if d.measured(m, 0) {
 		t.Error("a clean first load changed nothing visible, want changed=false")
 	}
@@ -41,7 +49,7 @@ func TestDemotion_PenaltyAccumulatesAndRetires(t *testing.T) {
 		t.Fatalf("clean load left penalty %.2f, want 0", p)
 	}
 
-	d.planned(m, 19.5, 20.6)
+	d.planned(m, 19.5, 0, 20.6)
 	if !d.measured(m, 1024) {
 		t.Error("a demotion must report a visible change")
 	}
@@ -53,7 +61,7 @@ func TestDemotion_PenaltyAccumulatesAndRetires(t *testing.T) {
 	}
 
 	// The held-back reload demoted again: hold back more, not the same.
-	d.planned(m, 18.5, 20.6)
+	d.planned(m, 18.5, 0, 20.6)
 	d.measured(m, 512)
 	if p := d.penaltyGB(m, 20.6); p != 1.5 {
 		t.Fatalf("penalty after a second demotion = %.2f, want 1.5", p)
@@ -98,7 +106,7 @@ func TestDemotion_ArmTakeOnce(t *testing.T) {
 // Every reader used outside WireDynamicOffload must cope with no tracker.
 func TestDemotion_NilSafe(t *testing.T) {
 	var d *demotionTracker
-	d.planned("m", 1, 1)
+	d.planned("m", 1, 0, 1)
 	if d.penaltyGB("m", 1) != 0 || d.liveMB("m") != 0 || d.stopped("m") {
 		t.Error("nil tracker must read as empty")
 	}

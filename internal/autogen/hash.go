@@ -354,7 +354,11 @@ const hashCacheSuffix = ".modelhash"
 // v118: a declared settings.encoders path whose file is gone is cleared before the
 // pool fill (declaredGone), so the scan supplies the part or it is reported missing
 // instead of emitting a flag at a path sd-server cannot open.
-const genVersion = "v118"
+// v119: llama profiles whose window the sizer picked carry ctxAuto: true, so the
+// spawn guard can trim an over-baked auto window instead of spilling layers.
+// v120: dense partial placements (-ngl <= block_count) no longer charge token_embd
+// and output.weight to VRAM (Metadata.IoWeightsGB): llama keeps both on the host.
+const genVersion = "v120"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

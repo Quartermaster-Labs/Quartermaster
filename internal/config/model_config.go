@@ -168,6 +168,15 @@ type ModelConfig struct {
 	// cost of a partial offload is visible before loading.
 	EstRamGB float64 `yaml:"estRamGB"`
 
+	// CtxAuto marks a launch whose -c the autogen sizer picked (no per-model
+	// ctx, ctx tier, variant ctx or -c pin asked for it). The spawn-time VRAM
+	// guard reads it: an auto window is a GUESS from the generate-time budget,
+	// so when the card has less free than that budget assumed, the guard may
+	// shrink it as far as the sizer's own minimum before it spills a layer. A
+	// window the user chose is only trimmed down to 60% of itself. Pure data
+	// here, like estVramGB; false for every hand-written config.
+	CtxAuto bool `yaml:"ctxAuto"`
+
 	// SlotCachePreamble opts this model out of PREAMBLE caches (the shared
 	// system+tools KV seed that is minted once per agent and reused by every
 	// load) while leaving its per-conversation snapshots alone. nil/absent =>

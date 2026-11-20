@@ -49,13 +49,28 @@ const (
 //     dynamic-resolution mmproj priced at its maximum image size, checkpoints
 //     the sizer reserves but llama keeps in host RAM), with nothing demoted;
 //   - shared usage is never zero for a healthy llama-server either: pinned host
-//     buffers are deliberate (0.9 GB on the 27B with --no-mmproj-offload).
+//     buffers are deliberate (0.9 GB on the 27B with --no-mmproj-offload);
+//   - a PARTIAL placement puts its CPU layers (or CPU experts) in host memory on
+//     purpose, and llama.cpp allocates those weights as pinned host buffers,
+//     which WDDM reports as the process's shared usage.
 //
 // A demotion shows in BOTH: VRAM comes up short AND the shortfall reappears as
-// shared memory. The smaller of the two is what both agree on.
-func demotedMB(estGB float64, dedicatedMB, sharedMB int) int {
+// shared memory beyond what the plan put there itself. The smaller of the two is
+// what both agree on.
+//
+// ramGB is that deliberate host share (EstRamGB). Without it every partial load
+// read as demoted: 2026-11-20, a dense 27B at -ngl 56/50/52 read 3344/4760/4290
+// MB shared, which is the ~0.9 GB baseline plus exactly the 9/15/13 CPU layers,
+// against a VRAM gap of ~1.9 GB that did not move however much was held back.
+// Each false positive raised the hold-back, the next load spilled more layers,
+// shared grew with them, and the check fired again: the hold-back reached 5.7 GB
+// and a reload with 20.9 GB free placed 15 GB. estRam also counts the CPU
+// layers' KV, which is ordinary (unpinned) RAM, so the subtraction is generous:
+// it can miss a small demotion on a partial load, never invent one.
+func demotedMB(estGB, ramGB float64, dedicatedMB, sharedMB int) int {
 	short := int(estGB*1024) - dedicatedMB
-	return max(0, min(short, sharedMB))
+	unplanned := sharedMB - int(ramGB*1024)
+	return max(0, min(short, unplanned))
 }
 
 // demotionPenalty is how much VRAM the next placement of a model assumes it
@@ -65,12 +80,18 @@ type demotionPenalty struct {
 	freeGB float64
 }
 
+// spawnPlan is what a spawn was placed against: est VRAM, the share it put in
+// host memory on purpose, and the raw free reading.
+type spawnPlan struct {
+	vramGB, ramGB, freeGB float64
+}
+
 // demotionTracker joins the spawn-time plan to the post-load measurement. All
 // state is in memory: a restart forgets every penalty, which is the right
 // default for a condition that a reboot is usually what clears.
 type demotionTracker struct {
 	mu      sync.Mutex
-	plans   map[string]demotionPenalty // model -> {est GB, raw free GB} of the last spawn
+	plans   map[string]spawnPlan // model -> placement of the last spawn
 	penalty map[string]demotionPenalty
 	live    map[string]int  // model -> demoted MB of the process running now
 	armed   map[string]bool // model -> ready, its first generating request not seen yet
@@ -78,7 +99,7 @@ type demotionTracker struct {
 
 func newDemotionTracker() *demotionTracker {
 	return &demotionTracker{
-		plans:   map[string]demotionPenalty{},
+		plans:   map[string]spawnPlan{},
 		penalty: map[string]demotionPenalty{},
 		live:    map[string]int{},
 		armed:   map[string]bool{},
@@ -110,7 +131,7 @@ func (d *demotionTracker) penaltyGB(model string, freeGB float64) float64 {
 
 // planned records what a spawn was placed against. est 0 (no llama placement
 // ran) forgets the plan, so the post-load check has nothing to compare.
-func (d *demotionTracker) planned(model string, estGB, freeGB float64) {
+func (d *demotionTracker) planned(model string, estGB, ramGB, freeGB float64) {
 	if d == nil {
 		return
 	}
@@ -120,7 +141,7 @@ func (d *demotionTracker) planned(model string, estGB, freeGB float64) {
 		delete(d.plans, model)
 		return
 	}
-	d.plans[model] = demotionPenalty{gb: estGB, freeGB: freeGB}
+	d.plans[model] = spawnPlan{vramGB: estGB, ramGB: ramGB, freeGB: freeGB}
 }
 
 // measured stores a post-load result and reports whether the UI-visible value
@@ -177,11 +198,11 @@ func (d *demotionTracker) stopped(model string) bool {
 	return had
 }
 
-func (d *demotionTracker) plan(model string) (float64, bool) {
+func (d *demotionTracker) plan(model string) (spawnPlan, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	p, ok := d.plans[model]
-	return p.gb, ok
+	return p, ok
 }
 
 // liveMB is the demoted MB of model's running process, 0 when none or unknown.
@@ -240,7 +261,7 @@ func (s *Server) checkDemotion(ctx context.Context, model string) {
 		return
 	case <-time.After(demotionCheckDelay):
 	}
-	est, ok := s.demotion.plan(model)
+	plan, ok := s.demotion.plan(model)
 	if !ok {
 		return
 	}
@@ -252,11 +273,12 @@ func (s *Server) checkDemotion(ctx context.Context, model string) {
 	if !ok {
 		return
 	}
-	mb := demotedMB(est, ded, sh)
+	est := plan.vramGB
+	mb := demotedMB(est, plan.ramGB, ded, sh)
 	if mb < demotionFloorMB {
 		// Info, not Debug: like dynoffload's "baked plan kept" line, a check that
 		// only speaks when it fires cannot be told apart from one that never ran.
-		s.proxylog.Infof("<%s> vram check: %d MB in VRAM, %d MB in system memory, est %.1f GB - resident as planned", model, ded, sh, est)
+		s.proxylog.Infof("<%s> vram check: %d MB in VRAM, %d MB in system memory, est %.1f GB (+%.1f GB host by plan) - resident as planned", model, ded, sh, est, plan.ramGB)
 		mb = 0
 	} else {
 		s.proxylog.Warnf("<%s> %.1f GB of this model was placed in SYSTEM memory at load (%d MB in VRAM, %d MB shared, est %.1f GB). "+

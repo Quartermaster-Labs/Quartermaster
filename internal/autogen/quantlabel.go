@@ -9,8 +9,12 @@ import "sort"
 type tensorScan struct {
 	expertShare float64
 	vocabElems  int64
-	diffKind    string
-	bakedEnc    bool
+	// ioBytes is the on-disk size of token_embd.weight plus output.weight: the
+	// two non-repeating weight tensors -ngl does not count (see
+	// Metadata.IoWeightsGB). 0 when neither is present or their type is unknown.
+	ioBytes  int64
+	diffKind string
+	bakedEnc bool
 	// condHidden is the hidden width of the TEXT ENCODER a diffusion transformer
 	// expects, read off the tensor that projects caption embeddings into the DiT
 	// (ne[0] is that projection input width). It is what lets the encoder pool

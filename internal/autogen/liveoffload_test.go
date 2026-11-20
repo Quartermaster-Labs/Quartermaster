@@ -204,6 +204,74 @@ func TestLiveOffload_TrimCtxKeepsBakedPlacement(t *testing.T) {
 	}
 }
 
+// An AUTO window baked against a budget the card does not have (targetVramGB
+// pinned above what the desktop leaves free) must be trimmed past the 60% floor
+// before a layer is spilled: that floor guards a window the user CHOSE. Measured
+// 2026-11-19: a 262k auto window, 16.6 GB free, and the guard kept all 262k while
+// spilling 20 of 65 dense layers. A pinned window keeps the old floor.
+func TestLiveOffload_TrimAutoCtxPastFloor(t *testing.T) {
+	meta := Metadata{
+		Architecture: "llama", BlockCount: 32,
+		HeadCountKv: 8, KeyLength: 128, ValueLength: 128,
+		ContextLength: 131072, EmbeddingLength: 4096,
+		FileSizeGB: 12,
+	}
+	s := Settings{
+		TargetVramGB: 24, VramOverheadGB: 0.5, MaxRamGB: 64,
+		DenseCtxLadder: []int{131072, 65536, 32768}, DenseMinCtx: 8192,
+	}
+	in := EstimateInput{Ctx: 131072, KvK: "q8_0", KvV: "q8_0", TargetVramGB: 30}
+	baked, err := EstimatePlan(s, meta, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baked.Ngl < int(meta.BlockCount) {
+		t.Fatalf("setup: expected a whole-model fit, got ngl=%d", baked.Ngl)
+	}
+
+	// A budget that holds the whole model at 40k but not at the 60% floor (~78k).
+	at40k := in
+	at40k.Ctx = 40960
+	fit40k, err := EstimatePlan(s, meta, at40k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tight := in
+	tight.TargetVramGB = fit40k.EstVramGB + 0.05
+	if short, _ := EstimatePlan(s, meta, tight); short.Ngl >= baked.Ngl {
+		t.Fatalf("setup: %.2fGB still fits the full window (ngl=%d)", tight.TargetVramGB, short.Ngl)
+	}
+
+	if _, _, ok := trimCtxForPlacement(s, meta, tight, 1, baked.Ngl, baked.NCpuMoe); ok {
+		t.Fatal("pinned window was trimmed below the 60% floor")
+	}
+
+	auto := s
+	auto.CtxAuto = true
+	ctx, trimmed, ok := trimCtxForPlacement(auto, meta, tight, 1, baked.Ngl, baked.NCpuMoe)
+	if !ok {
+		t.Fatal("auto window: no trim found")
+	}
+	if ctx >= int(float64(in.Ctx)*ctxTrimFloorFrac) || ctx < 40960 {
+		t.Fatalf("auto trim ctx = %d, want in [40960, 60%% of %d)", ctx, in.Ctx)
+	}
+	if trimmed.Ngl < baked.Ngl {
+		t.Fatalf("auto trim spilled anyway: ngl=%d want %d", trimmed.Ngl, baked.Ngl)
+	}
+
+	// Too tight even at the sizer minimum: the smallest probed window comes back
+	// with its own (worse) placement, so the spill is costed at THAT window.
+	starved := in
+	starved.TargetVramGB = 10
+	ctx, trimmed, ok = trimCtxForPlacement(auto, meta, starved, 1, baked.Ngl, baked.NCpuMoe)
+	if !ok || ctx != s.DenseMinCtx {
+		t.Fatalf("starved auto trim = (%d, ok=%v), want the %d minimum", ctx, ok, s.DenseMinCtx)
+	}
+	if trimmed.Ngl >= baked.Ngl {
+		t.Fatalf("starved: expected a spill at the minimum window, ngl=%d", trimmed.Ngl)
+	}
+}
+
 // The step is per-slot: with --parallel 4 the total -c has to move in 4x4096
 // blocks, or each slot ends up holding a non-multiple of the sizer's block.
 func TestLiveOffload_TrimStepsWholeSlots(t *testing.T) {
@@ -222,5 +290,39 @@ func TestLiveOffload_TrimStepsWholeSlots(t *testing.T) {
 	}
 	if args[3] != "32768" {
 		t.Fatalf("rewriteCtx mutated its input: %v", args)
+	}
+}
+
+// When the guard keeps a partial baked placement, the footprint it reports must
+// be the baked one, not the live plan's (which here fits the whole model):
+// the demotion check compares the launch against it, and the live figure
+// overstated VRAM and missed the CPU layers' host share.
+func TestLiveOffload_PlacedAtBakedPricesTheLaunch(t *testing.T) {
+	meta := Metadata{
+		Architecture: "llama", BlockCount: 32,
+		HeadCountKv: 8, KeyLength: 128, ValueLength: 128,
+		ContextLength: 32768, EmbeddingLength: 4096,
+		FileSizeGB: 12,
+	}
+	s := Settings{TargetVramGB: 24, VramOverheadGB: 0.5, MaxRamGB: 64, DenseMinCtx: 8192}
+	in := EstimateInput{Ctx: 32768, KvK: "q8_0", KvV: "q8_0", TargetVramGB: 30}
+	res, err := EstimatePlan(s, meta, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Ngl < int(meta.BlockCount) || res.EstRamGB != 0 {
+		t.Fatalf("setup: expected a whole-model fit, got ngl=%d ram=%.2f", res.Ngl, res.EstRamGB)
+	}
+
+	if got := placedAtBaked(s, meta, in, res, 99, 0); got != placedOf(res) {
+		t.Errorf("baked full placement: got %+v, want the live plan %+v", got, placedOf(res))
+	}
+
+	got := placedAtBaked(s, meta, in, res, 24, 0) // 8 of 32 layers baked onto the CPU
+	if got.RamGB <= 0 || got.VramGB >= res.EstVramGB {
+		t.Fatalf("baked -ngl 24: got %+v, want host share > 0 and VRAM < %.2f", got, res.EstVramGB)
+	}
+	if sum, want := got.VramGB+got.RamGB, res.EstVramGB+res.EstRamGB; sum < want-0.6 || sum > want+0.6 {
+		t.Errorf("baked -ngl 24 moved %.2fGB total, want ~%.2fGB (same model, only placement differs)", sum, want)
 	}
 }

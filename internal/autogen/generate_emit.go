@@ -633,6 +633,12 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 	}
 	writeEstVram(b, plan.EstVramGB)
 	writeEstRam(b, plan.EstRamGB)
+	// The sizer chose this window (prof.Ctx 0 = nobody pinned one), so the
+	// spawn guard may trim it hard rather than spill layers when the card has
+	// less free than the generate-time budget assumed. See liveoffload.md.
+	if prof.Ctx == 0 && ctx > 0 {
+		b.WriteString("    ctxAuto: true\n")
+	}
 	writeDisplayName(b, s, prof.Name)
 	if prof.Unlisted {
 		b.WriteString("    unlisted: true\n")
