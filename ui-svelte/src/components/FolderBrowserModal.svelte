@@ -79,7 +79,7 @@
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
     onclick={close}
     onkeydown={(e) => e.key === "Escape" && close()}
-    role="button"
+    role="presentation"
     tabindex="-1"
   >
     <div
