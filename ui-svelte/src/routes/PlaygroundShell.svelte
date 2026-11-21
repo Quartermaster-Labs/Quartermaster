@@ -823,7 +823,7 @@
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
     onclick={() => (confirmDeleteId = null)}
     onkeydown={(e) => e.key === "Escape" && (confirmDeleteId = null)}
-    role="button"
+    role="presentation"
     tabindex="-1"
   >
     <div
@@ -858,7 +858,7 @@
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
     onclick={() => (confirmDeleteThreeDId = null)}
     onkeydown={(e) => e.key === "Escape" && (confirmDeleteThreeDId = null)}
-    role="button"
+    role="presentation"
     tabindex="-1"
   >
     <div
@@ -893,7 +893,7 @@
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
     onclick={() => (confirmDeleteVideoId = null)}
     onkeydown={(e) => e.key === "Escape" && (confirmDeleteVideoId = null)}
-    role="button"
+    role="presentation"
     tabindex="-1"
   >
     <div
@@ -928,7 +928,7 @@
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
     onclick={() => (confirmDeleteImageId = null)}
     onkeydown={(e) => e.key === "Escape" && (confirmDeleteImageId = null)}
-    role="button"
+    role="presentation"
     tabindex="-1"
   >
     <div
@@ -963,7 +963,7 @@
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
     onclick={() => (confirmDeleteSpeechId = null)}
     onkeydown={(e) => e.key === "Escape" && (confirmDeleteSpeechId = null)}
-    role="button"
+    role="presentation"
     tabindex="-1"
   >
     <div
@@ -998,7 +998,7 @@
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
     onclick={() => (confirmDeleteMusicId = null)}
     onkeydown={(e) => e.key === "Escape" && (confirmDeleteMusicId = null)}
-    role="button"
+    role="presentation"
     tabindex="-1"
   >
     <div
@@ -1033,7 +1033,7 @@
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
     onclick={() => (confirmLogout = false)}
     onkeydown={(e) => e.key === "Escape" && (confirmLogout = false)}
-    role="button"
+    role="presentation"
     tabindex="-1"
   >
     <div
@@ -1068,7 +1068,7 @@
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
     onclick={() => (showSettings = false)}
     onkeydown={(e) => e.key === "Escape" && (showSettings = false)}
-    role="button"
+    role="presentation"
     tabindex="-1"
   >
     <div
