@@ -20,6 +20,29 @@ let showTimer: ReturnType<typeof setTimeout> | undefined;
 let activeTarget: HTMLElement | null = null;
 
 const DELAY_MS = 300;
+
+// A tap is not a hover. Mobile browsers fire compatibility `mouseenter` and a
+// `focus` on the element a finger lands on, and with no `mouseleave` to follow,
+// the tip then sat over the screen until the next tap somewhere else. A touch
+// user cannot hover anyway, so a tip is never shown for an enter or focus that
+// arrives right behind a touch. Pen is left alone: a pen does hover.
+const TOUCH_GRACE_MS = 800;
+let lastTouchAt = -Infinity;
+let touchWatch = false;
+function watchTouch(): void {
+  if (touchWatch || typeof window === "undefined") return;
+  touchWatch = true;
+  window.addEventListener(
+    "pointerdown",
+    (e) => {
+      if (e.pointerType === "touch") {
+        lastTouchAt = performance.now();
+        hide();
+      }
+    },
+    { capture: true, passive: true },
+  );
+}
 const GAP = 8; // px between the target and the tip
 const EDGE = 8; // min distance from the viewport edge
 
@@ -111,6 +134,7 @@ export function tip(node: HTMLElement, content: string | undefined | null) {
 
   function onEnter(): void {
     if (!text) return;
+    if (performance.now() - lastTouchAt < TOUCH_GRACE_MS) return;
     clearTimeout(showTimer);
     showTimer = setTimeout(() => show(node, text), DELAY_MS);
   }
@@ -123,6 +147,7 @@ export function tip(node: HTMLElement, content: string | undefined | null) {
   }
 
   syncNative();
+  watchTouch();
   node.addEventListener("mouseenter", onEnter);
   node.addEventListener("mouseleave", onLeave);
   node.addEventListener("focus", onEnter);

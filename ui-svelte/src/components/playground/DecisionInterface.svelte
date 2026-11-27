@@ -369,10 +369,13 @@
                     <Icon class="w-4 h-4 {on ? 'text-primary' : ''}" />
                     {t.label}
                   </span>
-                  <span class="text-micro text-txtsecondary leading-snug">{t.hint}</span>
+                  <span class="max-sm:hidden text-micro text-txtsecondary leading-snug">{t.hint}</span>
                 </button>
               {/each}
             </div>
+            <!-- Phones: three hints in three ~90px cards wrapped a word per line, so
+                 the cards drop them and the picked type's hint reads here instead. -->
+            <p class="sm:hidden -mt-1 text-micro text-txtsecondary leading-snug">{QUESTION_TYPES.find((t) => t.id === q.type)?.hint}</p>
 
             {#if q.type === "choice"}
               <div class="flex items-baseline justify-between">
@@ -381,10 +384,12 @@
               </div>
               <div class="flex flex-col gap-1.5">
                 {#each q.choices as c, ci (ci)}
-                  <div class="flex items-center gap-2">
+                  <!-- Phones: name + remove on one line, the description on its own line
+                       under the name (ml-8 = badge + gap), instead of a ~60px sliver. -->
+                  <div class="flex items-center gap-2 max-sm:flex-wrap max-sm:gap-y-1">
                     {@render badge(String.fromCharCode(65 + (ci % 26)))}
-                    <input class="{field} !w-40 font-mono" placeholder="option" aria-label="Option name" spellcheck="false" bind:value={c.option} disabled={running} />
-                    <input class="{field} flex-1 min-w-0" placeholder="description (optional)" aria-label="Option description" bind:value={c.description} disabled={running} />
+                    <input class="{field} !w-40 max-sm:!w-auto max-sm:flex-1 max-sm:min-w-0 font-mono" placeholder="option" aria-label="Option name" spellcheck="false" bind:value={c.option} disabled={running} />
+                    <input class="{field} flex-1 min-w-0 max-sm:order-last max-sm:basis-[calc(100%-2rem)] max-sm:ml-8" placeholder="description (optional)" aria-label="Option description" bind:value={c.description} disabled={running} />
                     <button class="icon-btn hover:!text-error" onclick={() => removeChoice(q, ci)} disabled={running || q.choices.length <= MIN_CHOICES} aria-label="Remove option">
                       <X class="w-4 h-4" />
                     </button>

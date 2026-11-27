@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import { History, Plus } from "lucide-svelte";
+  import { History, Menu, Plus } from "lucide-svelte";
   import { tip } from "../../lib/tooltip";
-  import { historyOpenStore } from "../../stores/playground";
+  import { historyOpenStore, navOpenStore } from "../../stores/playground";
   import { relTime } from "../../lib/playgroundThreads";
 
   // The h-10 hairline band atop a playground pane, the same band the dashboard
@@ -50,7 +50,11 @@
   let metaLine = $derived([meta, updatedAt ? relTime(updatedAt, now) : ""].filter(Boolean).join(" · "));
 </script>
 
-<div class="flex items-center gap-2 px-3 h-10 border-b border-card-border-inner shrink-0 min-w-0">
+<div class="flex items-center gap-2 px-3 max-md:px-2 h-10 border-b border-card-border-inner shrink-0 min-w-0">
+  <!-- Phones have no side rail; this opens it as a sheet (PlaygroundShell). -->
+  <button class="icon-btn shrink-0 md:hidden" onclick={() => navOpenStore.set(true)} aria-label="Open menu">
+    <Menu class="w-4 h-4" />
+  </button>
   <button
     class="icon-btn shrink-0"
     aria-pressed={$historyOpenStore}
@@ -87,13 +91,14 @@
     <span class="truncate text-sm text-txtmain min-w-0">{title}</span>
   {/if}
   {#if metaLine}
-    <span class="shrink-0 font-mono text-micro text-txtsecondary tabular-nums whitespace-nowrap">· {metaLine}</span>
+    <!-- Dropped on a phone: the title is the thing worth the width there. -->
+    <span class="shrink-0 font-mono text-micro text-txtsecondary tabular-nums whitespace-nowrap max-sm:hidden">· {metaLine}</span>
   {/if}
   <div class="ml-auto flex items-center gap-2 shrink-0">
     {@render right?.()}
-    <button class="btn btn--sm inline-flex items-center gap-1 h-7" onclick={onNew}>
+    <button class="btn btn--sm inline-flex items-center gap-1 h-7 max-sm:px-2" onclick={onNew} aria-label={newLabel}>
       <Plus class="w-3.5 h-3.5" />
-      {newLabel}
+      <span class="max-sm:hidden">{newLabel}</span>
     </button>
   </div>
 </div>

@@ -23,6 +23,8 @@
     memoryStore,
     selectedModelStore,
     historyOpenStore,
+    narrowStore,
+    navOpenStore,
   } from "../stores/playground";
   import { cachedVoices, fetchVoices, hasCachedVoices, voiceLabel, voiceSubstitution } from "../lib/voices";
   import { generateSpeech } from "../lib/speechApi";
@@ -91,7 +93,7 @@
     newMusicChatId,
     type MusicSession,
   } from "../stores/musicHistory";
-  import { MessageSquare, Image, Film, Box, Volume2, Music, Mic, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil, BrainCircuit, RefreshCw, Square, Split } from "lucide-svelte";
+  import { MessageSquare, Image, Film, Box, Volume2, Music, Mic, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil, BrainCircuit, RefreshCw, Square, Split, Menu } from "lucide-svelte";
   import WikiModal from "../components/WikiModal.svelte";
   import ChatInterface from "../components/playground/ChatInterface.svelte";
   import Select from "../components/Select.svelte";
@@ -104,7 +106,7 @@
   import SpeechInterface from "../components/playground/SpeechInterface.svelte";
   import MusicInterface from "../components/playground/MusicInterface.svelte";
   import HistoryDrawer, { type DrawerSession } from "../components/playground/HistoryDrawer.svelte";
-  import { slide } from "svelte/transition";
+  import { fade, slide } from "svelte/transition";
 
   type Tab = PlaygroundTab;
 
@@ -145,6 +147,13 @@
   function clickTab(id: Tab) {
     if (hasHistory(id) && $selectedTabStore === id) historyOpenStore.update((v) => !v);
     selectedTabStore.set(id);
+    navOpenStore.set(false);
+  }
+
+  // On a phone the history drawer is a sheet over the pane, so opening a thread
+  // has to get it out of the way; on a desktop it stays docked beside the thread.
+  function threadPicked() {
+    if ($narrowStore) historyOpenStore.set(false);
   }
 
   // Thumbnail strip for an image thread's drawer row: the newest results first,
@@ -681,9 +690,28 @@
   <!-- Side rail: icons only at rest; expands on hover.
        The slot reserves only the RESTING width - the rail itself is absolute inside it, so
        expanding draws over the tab like a curtain instead of reflowing it. -->
-  <div class="relative shrink-0 z-40 w-14">
+  <!-- Phones (below md): no slot at all. The same rail is a fixed sheet that
+       slides in from the left with its labels showing, opened by the menu
+       button in each pane's header and closed by picking a row or the scrim.
+       Tailwind v4 gates `hover:` on (hover: hover), so the hover-expand never
+       fires on a touch screen and the two modes cannot fight. -->
+  {#if $navOpenStore}
+    <button
+      class="md:hidden fixed inset-0 z-40 bg-black/50 cursor-default"
+      aria-label="Close menu"
+      tabindex="-1"
+      onclick={() => navOpenStore.set(false)}
+      transition:fade={{ duration: 150 }}
+    ></button>
+  {/if}
+  <div
+    class="relative shrink-0 z-40 w-14 max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:w-60 max-md:transition-transform max-md:duration-200 {$navOpenStore
+      ? 'max-md:translate-x-0 max-md:shadow-xl max-md:shadow-black/40'
+      : 'max-md:-translate-x-full'}"
+    inert={$narrowStore && !$navOpenStore}
+  >
   <nav
-    class="group/rail absolute inset-y-0 left-0 w-14 hover:w-48 transition-[width] duration-200 overflow-hidden flex flex-col bg-chrome pb-2 hover:shadow-xl hover:shadow-black/20"
+    class="group/rail absolute inset-y-0 left-0 w-14 hover:w-48 max-md:w-full transition-[width] duration-200 overflow-hidden flex flex-col bg-chrome pb-2 max-md:pt-1 max-md:pb-[max(0.5rem,env(safe-area-inset-bottom))] hover:shadow-xl hover:shadow-black/20"
   >
     <!-- No brand block: the title bar carries the mark and the name, so the
          rail is nav and nothing else, starting at the top (mirrors the
@@ -722,7 +750,7 @@
             {/if}
           </span>
         </span>
-        <span class="font-mono text-sm whitespace-nowrap opacity-0 group-hover/rail:opacity-100 transition-opacity">
+        <span class="font-mono text-sm whitespace-nowrap opacity-0 max-md:opacity-100 group-hover/rail:opacity-100 transition-opacity">
           {tab.label}
         </span>
       </button>
@@ -733,32 +761,32 @@
     <!-- Settings (placeholder for per-user memory mgmt) above logout, each its
          own row like the tabs. -->
     <button
-      onclick={() => { wikiArticleId = null; showWiki = true; }}
+      onclick={() => { wikiArticleId = null; showWiki = true; navOpenStore.set(false); }}
       use:tooltip={"The quartermaster wiki: loading, config, backends, troubleshooting"}
-      class="w-full flex items-center pr-2 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+      class="w-full flex items-center pr-2 h-10 max-md:h-12 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 flex items-center justify-center"><BookOpen size={18} class="shrink-0" /></span>
-      <span class="font-mono text-sm whitespace-nowrap opacity-0 group-hover/rail:opacity-100 transition-opacity">
+      <span class="font-mono text-sm whitespace-nowrap opacity-0 max-md:opacity-100 group-hover/rail:opacity-100 transition-opacity">
         Help
       </span>
     </button>
     <button
-      onclick={() => (showSettings = true)}
+      onclick={() => { showSettings = true; navOpenStore.set(false); }}
       use:tooltip={"Theme, memory, web search and the system prompt"}
-      class="w-full flex items-center pr-2 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+      class="w-full flex items-center pr-2 h-10 max-md:h-12 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 flex items-center justify-center"><Settings size={18} class="shrink-0" /></span>
-      <span class="font-mono text-sm whitespace-nowrap opacity-0 group-hover/rail:opacity-100 transition-opacity">
+      <span class="font-mono text-sm whitespace-nowrap opacity-0 max-md:opacity-100 group-hover/rail:opacity-100 transition-opacity">
         Settings
       </span>
     </button>
     <button
-      onclick={() => (confirmLogout = true)}
+      onclick={() => { confirmLogout = true; navOpenStore.set(false); }}
       use:tooltip={`Log out (${$me})`}
-      class="w-full flex items-center pr-2 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+      class="w-full flex items-center pr-2 h-10 max-md:h-12 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 flex items-center justify-center"><LogOut size={18} class="shrink-0" /></span>
-      <span class="font-mono text-sm whitespace-nowrap truncate opacity-0 group-hover/rail:opacity-100 transition-opacity">
+      <span class="font-mono text-sm whitespace-nowrap truncate opacity-0 max-md:opacity-100 group-hover/rail:opacity-100 transition-opacity">
         {$me}
       </span>
     </button>
@@ -773,7 +801,7 @@
        Sits before <main> in the DOM and <main> is `relative`, so it paints over
        this and leaves it showing only where the corner is cut away. -->
   {#if $selectedTabStore === tabs[0].id}
-    <span class="absolute top-0 h-10 w-4 bg-secondary/60 left-14"></span>
+    <span class="max-md:hidden absolute top-0 h-10 w-4 bg-secondary/60 left-14"></span>
   {/if}
 
   <!-- Tab content. Hairlines on its top and left edges are the whole separator
@@ -784,35 +812,56 @@
        (a flex sibling, not an overlay), so the thread stays readable beside the
        list. It slides on the x axis; the drawer's fixed width keeps its rows
        from reflowing while the wrapper's width animates. -->
-  <main class="relative flex-1 min-w-0 flex rounded-tl-lg border-t border-l border-border bg-background overflow-hidden">
+  <main class="relative flex-1 min-w-0 flex md:rounded-tl-lg md:border-t md:border-l border-border bg-background overflow-hidden">
     {#if $historyOpenStore && hasHistory($selectedTabStore)}
-      <div class="shrink-0 h-full overflow-hidden" transition:slide={{ axis: "x", duration: 200 }}>
+      <!-- Phones: a sheet over the pane with a scrim, not a pushed column (a
+           260px column would leave the thread ~130px wide). -->
+      <button
+        class="md:hidden absolute inset-0 z-30 bg-black/50 cursor-default"
+        aria-label="Close history"
+        tabindex="-1"
+        onclick={() => historyOpenStore.set(false)}
+        transition:fade={{ duration: 150 }}
+      ></button>
+      <div class="shrink-0 h-full overflow-hidden max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:max-w-[85%] max-md:shadow-xl max-md:shadow-black/40" transition:slide={{ axis: "x", duration: 200 }}>
         {#if onChats}
-          <HistoryDrawer heading="Chats" sessions={chatRows} activeId={$activeChatId} generatingId={$generatingChatId} unit="msg" emptyLabel="New chat" onOpen={(id) => activeChatId.set(id)} onDelete={(id) => (confirmDeleteId = id)} />
+          <HistoryDrawer heading="Chats" sessions={chatRows} activeId={$activeChatId} generatingId={$generatingChatId} unit="msg" emptyLabel="New chat" onOpen={(id) => { activeChatId.set(id); threadPicked(); }} onDelete={(id) => (confirmDeleteId = id)} />
         {:else if onImages}
-          <HistoryDrawer heading="Image threads" sessions={imageRows} activeId={$activeImageChatId} generatingId={$generatingImageChatId} unit="turn" emptyLabel="New image" onOpen={(id) => activeImageChatId.set(id)} onDelete={(id) => (confirmDeleteImageId = id)} thumbsFor={imageThumbs} />
+          <HistoryDrawer heading="Image threads" sessions={imageRows} activeId={$activeImageChatId} generatingId={$generatingImageChatId} unit="turn" emptyLabel="New image" onOpen={(id) => { activeImageChatId.set(id); threadPicked(); }} onDelete={(id) => (confirmDeleteImageId = id)} thumbsFor={imageThumbs} />
         {:else if onVideo}
-          <HistoryDrawer heading="Videos" sessions={videoRows} activeId={$activeVideoChatId} generatingId={$generatingVideoChatId} unit="clip" emptyLabel="New video" onOpen={(id) => activeVideoChatId.set(id)} onDelete={(id) => (confirmDeleteVideoId = id)} />
+          <HistoryDrawer heading="Videos" sessions={videoRows} activeId={$activeVideoChatId} generatingId={$generatingVideoChatId} unit="clip" emptyLabel="New video" onOpen={(id) => { activeVideoChatId.set(id); threadPicked(); }} onDelete={(id) => (confirmDeleteVideoId = id)} />
         {:else if onThreeD}
-          <HistoryDrawer heading="Meshes" sessions={threeDRows} activeId={$activeThreeDChatId} generatingId={$generatingThreeDChatId} unit="mesh" emptyLabel="New mesh" onOpen={(id) => activeThreeDChatId.set(id)} onDelete={(id) => (confirmDeleteThreeDId = id)} thumbsFor={threeDThumbs} />
+          <HistoryDrawer heading="Meshes" sessions={threeDRows} activeId={$activeThreeDChatId} generatingId={$generatingThreeDChatId} unit="mesh" emptyLabel="New mesh" onOpen={(id) => { activeThreeDChatId.set(id); threadPicked(); }} onDelete={(id) => (confirmDeleteThreeDId = id)} thumbsFor={threeDThumbs} />
         {:else if onSpeech}
-          <HistoryDrawer heading="Speech" sessions={speechRows} activeId={$activeSpeechChatId} generatingId={$generatingSpeechChatId} unit="take" emptyLabel="New speech" onOpen={(id) => activeSpeechChatId.set(id)} onDelete={(id) => (confirmDeleteSpeechId = id)} />
+          <HistoryDrawer heading="Speech" sessions={speechRows} activeId={$activeSpeechChatId} generatingId={$generatingSpeechChatId} unit="take" emptyLabel="New speech" onOpen={(id) => { activeSpeechChatId.set(id); threadPicked(); }} onDelete={(id) => (confirmDeleteSpeechId = id)} />
         {:else if onMusic}
-          <HistoryDrawer heading="Music" sessions={musicRows} activeId={$activeMusicChatId} generatingId={$generatingMusicChatId} unit="take" emptyLabel="New music" onOpen={(id) => activeMusicChatId.set(id)} onDelete={(id) => (confirmDeleteMusicId = id)} />
+          <HistoryDrawer heading="Music" sessions={musicRows} activeId={$activeMusicChatId} generatingId={$generatingMusicChatId} unit="take" emptyLabel="New music" onOpen={(id) => { activeMusicChatId.set(id); threadPicked(); }} onDelete={(id) => (confirmDeleteMusicId = id)} />
         {/if}
       </div>
     {/if}
     <!-- Chat, Images, Speech and Music draw their own edge-to-edge header band, so they
          own their padding; the older tabs keep the 16px gutter here. -->
-    <div class="relative flex-1 min-w-0 h-full">
+    <div class="relative flex-1 min-w-0 h-full flex flex-col">
+      <!-- Transcription and Decision draw no PaneHeader, so on a phone they would
+           have no way to reach the menu. Give them a bare band with the button. -->
+      {#if $selectedTabStore === "audio" || $selectedTabStore === "decision"}
+        <div class="md:hidden flex items-center gap-2 px-2 h-10 border-b border-card-border-inner shrink-0">
+          <button class="icon-btn shrink-0" onclick={() => navOpenStore.set(true)} aria-label="Open menu">
+            <Menu class="w-4 h-4" />
+          </button>
+          <span class="text-sm text-txtmain">{tabs.find((t) => t.id === $selectedTabStore)?.label}</span>
+        </div>
+      {/if}
+      <div class="relative flex-1 min-h-0">
       <div class="h-full" class:tab-hidden={$selectedTabStore !== "chat"}><ChatInterface /></div>
       <div class="h-full" class:tab-hidden={$selectedTabStore !== "images"}><ImageInterface /></div>
-      <div class="h-full px-4 pb-4" class:tab-hidden={$selectedTabStore !== "video"}><VideoInterface /></div>
-      <div class="h-full px-4 pb-4" class:tab-hidden={$selectedTabStore !== "3d"}><ThreeDInterface /></div>
+      <div class="h-full px-4 pb-4 max-md:px-2 max-md:pb-2" class:tab-hidden={$selectedTabStore !== "video"}><VideoInterface /></div>
+      <div class="h-full px-4 pb-4 max-md:px-2 max-md:pb-2" class:tab-hidden={$selectedTabStore !== "3d"}><ThreeDInterface /></div>
       <div class="h-full" class:tab-hidden={$selectedTabStore !== "speech"}><SpeechInterface /></div>
       <div class="h-full" class:tab-hidden={$selectedTabStore !== "music"}><MusicInterface /></div>
-      <div class="h-full px-4 pb-4" class:tab-hidden={$selectedTabStore !== "audio"}><AudioInterface /></div>
-      <div class="h-full px-4 pb-4" class:tab-hidden={$selectedTabStore !== "decision"}><DecisionInterface /></div>
+      <div class="h-full px-4 pb-4 max-md:px-2 max-md:pb-2" class:tab-hidden={$selectedTabStore !== "audio"}><AudioInterface /></div>
+      <div class="h-full px-4 pb-4 max-md:px-2 max-md:pb-2" class:tab-hidden={$selectedTabStore !== "decision"}><DecisionInterface /></div>
+      </div>
     </div>
   </main>
 </div>

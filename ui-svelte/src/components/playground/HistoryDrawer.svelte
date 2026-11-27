@@ -111,7 +111,7 @@
             {/if}
           </button>
           <button
-            class="shrink-0 p-1 rounded text-txtsecondary opacity-0 group-hover/row:opacity-100 focus:opacity-100 hover:text-error transition-opacity"
+            class="shrink-0 p-1 [@media(pointer:coarse)]:p-2 rounded text-txtsecondary opacity-0 [@media(hover:none)]:opacity-100 group-hover/row:opacity-100 focus:opacity-100 hover:text-error transition-opacity"
             onclick={(e) => { e.stopPropagation(); onDelete(s.id); }}
             use:tip={"Delete"}
             aria-label="Delete"

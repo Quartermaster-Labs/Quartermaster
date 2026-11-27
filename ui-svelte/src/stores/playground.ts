@@ -1,4 +1,4 @@
-import { derived, get, writable } from "svelte/store";
+import { derived, get, readable, writable } from "svelte/store";
 import { persistentStore } from "./persistent";
 import { models } from "./api";
 import { modelCategory } from "../lib/modelUtils";
@@ -124,3 +124,21 @@ export const searchDedupeStore = userPref<boolean>("playground-search-dedupe", t
 // History drawer open state, one for every tab. Shared so the rail icon (click
 // the active tab again) and each pane's header toggle drive the same drawer.
 export const historyOpenStore = persistentStore<boolean>("playground-history-open", false);
+
+// Phone layout: below Tailwind's `md` (768px) the side rail and the history
+// drawer stop taking a column and become sheets over the pane. Same breakpoint
+// as every `max-md:` class that styles them, so script and CSS cannot disagree.
+// The query is in CSS pixels of the zoomed document's viewport, which is what
+// the `max-md:` media queries see too.
+const NARROW_QUERY = "(max-width: 767.98px)";
+export const narrowStore = readable(false, (set) => {
+  if (typeof window === "undefined" || !window.matchMedia) return;
+  const mq = window.matchMedia(NARROW_QUERY);
+  set(mq.matches);
+  const on = (e: MediaQueryListEvent) => set(e.matches);
+  mq.addEventListener("change", on);
+  return () => mq.removeEventListener("change", on);
+});
+// The phone nav sheet. Not persisted: a sheet that reopens itself on reload is
+// in the way of the thread the user came back for.
+export const navOpenStore = writable(false);

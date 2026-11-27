@@ -347,10 +347,10 @@
       onNew={newThread}
     />
 
-    <div class="flex-1 min-h-0 flex">
+    <div class="flex-1 min-h-0 flex max-md:flex-col">
       <!-- Params. There is no prompt: the source image IS the request, so it
            takes the slot the other tabs give their prompt box. -->
-      <aside class="w-[25rem] shrink-0 flex flex-col min-h-0 bg-rail border-r border-card-border-inner">
+      <aside class="w-[25rem] max-md:w-full max-md:max-h-[45%] shrink-0 flex flex-col min-h-0 bg-rail border-r max-md:border-r-0 max-md:border-b border-card-border-inner">
         <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll">
           <div class="px-4 py-3.5 border-b border-card-border-inner flex flex-col gap-2.5">
             <div class="rounded-xl border border-composer-border bg-surface hover:ring-1 hover:ring-composer-ring transition-colors flex flex-col">
@@ -358,7 +358,7 @@
                 <div class="group relative m-2 mb-0 h-[8.5rem] rounded-lg overflow-hidden bg-secondary flex items-center justify-center">
                   <img src={pending} alt="Source" class="max-h-full max-w-full object-contain" />
                   <button
-                    class="absolute top-1.5 right-1.5 w-6 h-6 flex items-center justify-center rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                    class="absolute top-1.5 right-1.5 w-6 h-6 flex items-center justify-center rounded-full bg-black/60 text-white opacity-0 [@media(hover:none)]:opacity-100 group-hover:opacity-100 transition-opacity"
                     onclick={() => { pending = null; pendingName = ""; }}
                     aria-label="Remove image"
                   ><X class="w-3.5 h-3.5" /></button>
@@ -480,7 +480,7 @@
       <!-- Canvas: one mesh at a time, big. The strip underneath is the thread. -->
       <section class="flex-1 min-w-0 flex flex-col min-h-0">
         {#if turns.length === 0 && !isGenerating}
-          <div class="flex-1 flex flex-col items-center justify-center gap-3 text-txtsecondary">
+          <div class="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center text-txtsecondary">
             <Box class="w-10 h-10 opacity-40" strokeWidth={1.5} />
             <p>Drop or pick an image to turn it into a 3D mesh.</p>
           </div>
