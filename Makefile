@@ -232,6 +232,19 @@ package-windows: windows
 	fi
 	@echo "Done: $(PKG_WIN_DIR)"
 
+# Launch the packaged build that package-windows just refreshed, the way a
+# double-click would: detached, so make returns at once and the app outlives
+# this terminal. With one already running, the new launch hands off to it (-app
+# single instance) and raises the OLD window instead; package-windows cannot
+# overwrite a running Quartermaster.exe either, so quit the app before
+# re-packaging. Chain both with `make package-windows start`.
+# No $ in the PowerShell line: make runs recipes through sh, which expands $vars
+# inside the double quotes before PowerShell ever sees them.
+start:
+	@test -f $(PKG_WIN_DIR)/Quartermaster.exe || { echo "No packaged build in $(PKG_WIN_DIR); run make package-windows first"; exit 1; }
+	@echo "Starting $(PKG_WIN_DIR)/Quartermaster.exe"
+	@powershell -NoProfile -Command "Start-Process -FilePath (Resolve-Path '$(PKG_WIN_DIR)/Quartermaster.exe') -WorkingDirectory (Resolve-Path '$(PKG_WIN_DIR)')"
+
 # Assemble a runnable Linux/Mac folder + tar.gz. Same in-place, user-data-preserving
 # refresh as package-windows; no launcher .cmd (the binary runs directly), but the
 # systemd unit ships under packaging/. ponytail: amd64 linux / arm64 mac only — add
@@ -378,5 +391,5 @@ test-ui:
 	cd ui-svelte && npm ci && npm run check && npm test
 
 # Phony targets
-.PHONY: all clean ui dist mac windows versioninfo versioninfo-setup ui-setup setup-windows package-windows package-linux package-mac _package-nix simple-responder simple-responder-windows test test-all test-dev test-ui release release-public release-binaries _build-release
+.PHONY: all clean ui dist mac windows versioninfo versioninfo-setup ui-setup setup-windows package-windows start package-linux package-mac _package-nix simple-responder simple-responder-windows test test-all test-dev test-ui release release-public release-binaries _build-release
 .PHONY: linux linux-arm64 linux-amd64
