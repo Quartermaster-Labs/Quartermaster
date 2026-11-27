@@ -61,6 +61,7 @@ Go module (`go.mod`). `Makefile` at root. Build binaries into `./build/`. Window
 - `make test-dev` — quick run (`go test` + `staticcheck`); fix all static-check errors.
 - `make test-all` — full run incl. long concurrency tests; before completing work.
 - `make test-ui` — after UI changes in `ui-svelte/`.
+- `make start` — launch the packaged Windows build (`build/quartermaster-windows/Quartermaster.exe`) detached, after `make package-windows`.
 
 ## Conventions
 
