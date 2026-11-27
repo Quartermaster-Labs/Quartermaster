@@ -928,7 +928,7 @@
     {#if role === "assistant"}
       {#if onReply && !isStreaming && !overAsk}
         <button
-          class="absolute left-full ml-2 -translate-y-1/2 z-10 p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary opacity-0 group-hover:opacity-100 transition-opacity"
+          class="absolute left-full ml-2 -translate-y-1/2 z-10 p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary opacity-0 [@media(hover:none)]:opacity-100 group-hover:opacity-100 transition-opacity"
           style="top: min({replyY}px, calc(100% - 10px))"
           onclick={onReply}
           use:tip={"Reply to this message"}
@@ -1393,7 +1393,7 @@
         {/if}
         {#if canEdit}
           <button
-            class="absolute top-1.5 right-1.5 p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all bg-white/10 text-white/70 hover:text-white hover:bg-white/25"
+            class="absolute top-1.5 right-1.5 p-1 rounded-full opacity-0 [@media(hover:none)]:opacity-100 group-hover:opacity-100 transition-all bg-white/10 text-white/70 hover:text-white hover:bg-white/25"
             onclick={startEdit}
             use:tip={"Edit message"}
           >

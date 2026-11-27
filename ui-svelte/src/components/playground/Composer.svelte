@@ -141,7 +141,7 @@
   ></textarea>
 
   <div class="flex items-center justify-between" bind:clientHeight={controlsH}>
-    <div class="flex-1 min-w-0 flex items-center gap-1">
+    <div class="flex-1 min-w-fit flex items-center gap-1">
       {@render leftButtons?.()}
     </div>
 
@@ -150,7 +150,7 @@
       {@render ctxBar?.()}
     </div>
 
-    <div class="flex-1 min-w-0 flex items-center justify-end gap-1">
+    <div class="flex-1 min-w-fit flex items-center justify-end gap-1">
       {@render extraRightButtons?.()}
       <button
         bind:this={settingsToggleEl}

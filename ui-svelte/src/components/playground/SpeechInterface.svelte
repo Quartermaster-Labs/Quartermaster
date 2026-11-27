@@ -696,10 +696,10 @@
       <p>No models configured. Add models to your configuration to generate speech.</p>
     </div>
   {:else}
-    <div class="flex-1 min-h-0 flex">
+    <div class="flex-1 min-h-0 flex max-md:flex-col">
       <!-- LEFT: voice panel. voice_design lists user presets; every other model
            type lists the server's voices. -->
-      <aside class="w-[19.375rem] shrink-0 flex flex-col min-h-0 bg-rail border-r border-card-border-inner">
+      <aside class="w-[19.375rem] max-md:w-full max-md:max-h-[35%] shrink-0 flex flex-col min-h-0 bg-rail border-r max-md:border-r-0 max-md:border-b border-card-border-inner">
         <div class="flex items-center gap-2 pl-4 pr-2 h-10 border-b border-card-border-inner shrink-0">
           <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">{isVoiceDesign ? "Voice preset" : "Voice"}</span>
           {#if !isVoiceDesign}
@@ -758,7 +758,7 @@
                 </button>
                 {#if $selectedPresetStore === p.name}<Check class="w-4 h-4 shrink-0 text-primary" />{/if}
                 <button
-                  class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 text-txtsecondary hover:text-primary"
+                  class="shrink-0 p-1 rounded opacity-0 [@media(hover:none)]:opacity-100 group-hover:opacity-100 text-txtsecondary hover:text-primary"
                   onclick={() => openPreset(p)}
                   use:tip={"Edit preset"}
                 >
@@ -766,7 +766,7 @@
                 </button>
                 {#if !isDefaultPreset(p.name)}
                   <button
-                    class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 text-txtsecondary hover:text-error"
+                    class="shrink-0 p-1 rounded opacity-0 [@media(hover:none)]:opacity-100 group-hover:opacity-100 text-txtsecondary hover:text-error"
                     onclick={() => deletePreset(p.name)}
                     use:tip={"Delete preset"}
                   >
@@ -796,7 +796,7 @@
                 </button>
                 {#if isBaseModel && v}
                   <button
-                    class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 text-txtsecondary hover:text-error"
+                    class="shrink-0 p-1 rounded opacity-0 [@media(hover:none)]:opacity-100 group-hover:opacity-100 text-txtsecondary hover:text-error"
                     onclick={() => deleteVoice(v)}
                     use:tip={"Delete voice"}
                   >
@@ -822,7 +822,7 @@
       </aside>
 
       <!-- RIGHT: takes grid over the composer. -->
-      <div class="flex-1 min-w-0 flex flex-col min-h-0 px-6">
+      <div class="flex-1 min-w-0 flex flex-col min-h-0 px-6 max-md:px-3">
         <!-- Takes header: playback volume + auto-play live with the clips they act on. -->
         <div class="flex items-center gap-2.5 h-10 shrink-0">
           <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Takes</span>
@@ -1002,7 +1002,7 @@
               {/if}
             </div>
           </div>
-          <div class="flex justify-center gap-4 mt-2 text-micro text-txtsecondary select-none">
+          <div class="hidden sm:flex justify-center gap-4 mt-2 text-micro text-txtsecondary select-none">
             <span><kbd class="font-mono">Enter</kbd> speak</span>
             <span><kbd class="font-mono">Shift+Enter</kbd> new line</span>
           </div>

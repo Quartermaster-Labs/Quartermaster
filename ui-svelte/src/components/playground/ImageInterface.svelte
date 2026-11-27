@@ -1224,11 +1224,11 @@
       onNew={newThread}
     />
 
-    <div class="flex-1 min-h-0 flex">
+    <div class="flex-1 min-h-0 flex max-md:flex-col">
       <!-- Params: everything that shapes the NEXT render. The prompt sits on
            top because it is what changes every turn; the knobs below it change
            rarely, and the rarest live under Advanced. -->
-      <aside class="w-[25rem] shrink-0 flex flex-col min-h-0 bg-rail border-r border-card-border-inner">
+      <aside class="w-[25rem] max-md:w-full max-md:max-h-[45%] shrink-0 flex flex-col min-h-0 bg-rail border-r max-md:border-r-0 max-md:border-b border-card-border-inner">
         <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll">
           <div class="px-4 py-3.5 border-b border-card-border-inner flex flex-col gap-2.5">
             <div class="rounded-xl border border-composer-border bg-surface hover:ring-1 hover:ring-composer-ring focus-within:border-primary transition-colors flex flex-col">
@@ -1340,12 +1340,12 @@
                   <div class="group relative w-14 h-14 rounded-lg overflow-hidden border border-card-border bg-secondary">
                     <img src={img} alt="attachment {i + 1}" class="w-full h-full object-cover" />
                     <button
-                      class="absolute top-0 right-0 w-5 h-5 flex items-center justify-center bg-black/60 text-white rounded-bl opacity-0 group-hover:opacity-100 transition-opacity"
+                      class="absolute top-0 right-0 w-5 h-5 flex items-center justify-center bg-black/60 text-white rounded-bl opacity-0 [@media(hover:none)]:opacity-100 group-hover:opacity-100 transition-opacity"
                       onclick={() => (attached = attached.filter((_, j) => j !== i))}
                       aria-label="Remove attachment {i + 1}"
                     ><X class="w-3 h-3" /></button>
                     <button
-                      class="absolute top-0 left-0 w-5 h-5 flex items-center justify-center bg-black/60 text-white rounded-br opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-40 disabled:cursor-default"
+                      class="absolute top-0 left-0 w-5 h-5 flex items-center justify-center bg-black/60 text-white rounded-br opacity-0 [@media(hover:none)]:opacity-100 group-hover:opacity-100 transition-opacity disabled:opacity-40 disabled:cursor-default"
                       onclick={() => runUpscale(img, "a" + i)}
                       disabled={upscaling !== null || isGenerating}
                       use:tip={"Upscale ×4"}
@@ -1642,7 +1642,7 @@
               </button>
             {/if}
           </div>
-          <div class="flex items-center gap-3 text-micro text-txtsecondary">
+          <div class="flex items-center gap-3 text-micro text-txtsecondary max-sm:hidden">
             <span><kbd class="font-mono">Enter</kbd> generate</span>
             <span><kbd class="font-mono">Shift+Enter</kbd> new line</span>
           </div>

@@ -1169,6 +1169,11 @@
    source order against the utility layer does not matter. */
 :root .h-screen {
   height: calc(100vh / var(--qm-scale));
+  /* A phone browser's 100vh is the viewport with its address bar HIDDEN, so a
+     100vh root runs under the bar and the composer sits below the fold. dvh
+     tracks the bar. Kept as a second declaration so an engine without dvh
+     keeps the vh line above. */
+  height: calc(100dvh / var(--qm-scale));
 }
 
 /* The title bar is INSIDE the zoomed document, so its 2rem is already scaled

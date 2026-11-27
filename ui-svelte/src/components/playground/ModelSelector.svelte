@@ -287,7 +287,7 @@
     {#if open}
       <div
         class="absolute z-30 max-h-80 overflow-y-auto pretty-scroll rounded-md border border-card-border bg-surface shadow-lg pb-1.5 text-[0.8125rem] {ghost
-          ? 'left-1/2 -translate-x-1/2 min-w-[22rem] max-w-[30rem]'
+          ? 'left-1/2 -translate-x-1/2 min-w-[min(22rem,calc(100vw/var(--qm-scale)-1rem))] max-w-[min(30rem,calc(100vw/var(--qm-scale)-1rem))]'
           : 'left-0 right-0'} {dropUp ? 'bottom-full mb-1' : 'top-full mt-1'}"
       >
         <!-- The first section heading, with the search box filling the rest of

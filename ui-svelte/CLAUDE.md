@@ -58,7 +58,7 @@ changing anything under `ui-svelte/`.
 |---|---|
 | `src/main.ts`, `src/App.svelte` | Entry point + root. `App.svelte` fetches `/api/mode` and renders either the dashboard shell (Sidebar + StatusRail + Router) **or** the standalone `PlaygroundApp`. |
 | `src/routes/PlaygroundApp.svelte` | Playground root: gates the app behind login (`playgroundAuth` `me`), hydrates server-backed chats/prefs, then mounts `PlaygroundShell`. |
-| `src/routes/PlaygroundShell.svelte` | Playground shell: icon side-rail (Chat / Images / Video / 3D / Speech / Music / Transcription / Decision, hover-expand), the history drawer (`HistoryDrawer`, slides in and pushes the pane, every tab but Transcription and Decision, open state in `historyOpenStore`), logout + username, and the playground Settings modal (**General / Memory / Search / Prompt**). |
+| `src/routes/PlaygroundShell.svelte` | Playground shell: icon side-rail (Chat / Images / Video / 3D / Speech / Music / Transcription / Decision, hover-expand), the history drawer (`HistoryDrawer`, slides in and pushes the pane, every tab but Transcription and Decision, open state in `historyOpenStore`), logout + username, and the playground Settings modal (**General / Memory / Search / Prompt**). Below `md` the rail and the drawer become sheets; see **Phone layout** under Conventions. |
 | `src/routes/Login.svelte` | Playground username/password sign-in **and** sign-up (hashed; unknown users are rejected, not registered). Opens on the sign-up pane when `GET /auth/accounts` says no account exists yet. |
 | `src/routes/` | Top-level pages mounted by the router. |
 | `src/components/` | Reusable UI components (panels, modals, gauges, charts, tooltips). |
@@ -450,6 +450,33 @@ the model is still thinking. A cleared title goes back to the tab's derived one 
   `h-10`, the same height as the status rail, so only the first can ever reach the corner. The
   underlay must come first in the DOM with the element in front of it `relative`, or it paints over
   the thing it is supposed to sit behind.
+- **Phone layout (playground only).** Below Tailwind's `md` (768px) the playground stops being a
+  three-column app, because a 56px rail plus a 260px drawer plus a 310-400px studio panel leaves a
+  390px phone nothing for the thread. `stores/playground.ts` `narrowStore` is the same breakpoint as a
+  matchMedia, for the few things CSS cannot do (closing the history sheet when a thread is opened);
+  everything else is `max-md:` classes so script and CSS cannot disagree.
+  - The rail is a fixed sheet (`navOpenStore`, not persisted) opened by the `md:hidden` menu button
+    in `PaneHeader`, and by a bare band the shell draws for the two tabs with no PaneHeader
+    (Transcription, Decision). `inert` while closed, so its off-screen rows are not tab stops. Picking
+    a row, Help, Settings or Logout closes it. Tailwind v4 gates `hover:` on `(hover: hover)`, which
+    is why the hover-expand never fights the sheet on a touch screen.
+  - The history drawer is an overlay with a scrim instead of a pushed column. `<main>` drops its
+    `rounded-tl-lg border-t border-l` and the notch underlay is hidden: with no rail beside it there
+    is no chrome for the hairline L to separate.
+  - Studio tabs (Speech, Music, Images, Video, 3D) stack: the side panel goes on top, `max-md:w-full`
+    and capped at `max-h-[45%]` (Speech 35%: the voice list matters less than the takes), and the
+    panel's own inner scroller takes the overflow. The Images/Video prompt lives IN that panel, so it
+    cannot become a hidden sheet the way the history does.
+  - Anything revealed only on hover (row delete, attachment remove) also carries
+    `[@media(hover:none)]:opacity-100`; a phone has no hover, so without it those buttons do not
+    exist there. Write new hover-revealed controls the same way.
+  - `lib/tooltip.ts` ignores an enter/focus arriving within 800ms of a touch `pointerdown`. Phones
+    fire compatibility `mouseenter` on a tap and never a `mouseleave`, so every tapped button left
+    its tip stuck on screen.
+  - `h-screen` is `100dvh` (with a `100vh` line first as the fallback): a phone browser's `100vh` is
+    the height with its address bar hidden, which put the composer below the fold.
+  Verify with `npm run shots -- --playground ... --widths 390 --height 844`; for the tap-opened
+  sheets, drive the same fixture with `isMobile`/`hasTouch` so `hover:none` applies.
 - **`h-10` is the app's row unit.** A sidebar item, the status rail and every page's first
   toolbar row are all 40px, so the chrome and the page content share one horizontal grid. Give a
   toolbar `min-h-10` (not `h-10`) wherever its contents can wrap, and `items-stretch` on a tab bar

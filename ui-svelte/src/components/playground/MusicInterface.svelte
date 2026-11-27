@@ -927,9 +927,9 @@
       <p>No music models. Download ACE-Step, MiniMax Music 3, YuE2, HTDemucs or SheetSage2 from the model browser to use this tab.</p>
     </div>
   {:else}
-    <div bind:this={rootEl} class="flex-1 min-h-0 flex">
+    <div bind:this={rootEl} class="flex-1 min-h-0 flex max-md:flex-col">
       <!-- LEFT: mode + settings. -->
-      <aside class="w-[19.375rem] shrink-0 flex flex-col min-h-0 bg-rail border-r border-card-border-inner">
+      <aside class="w-[19.375rem] max-md:w-full max-md:max-h-[45%] shrink-0 flex flex-col min-h-0 bg-rail border-r max-md:border-r-0 max-md:border-b border-card-border-inner">
         <div class="flex items-center gap-2 px-3 h-10 border-b border-card-border-inner shrink-0">
           <div class="seg w-full" role="group" aria-label="Mode">
             {#each modes as m (m)}
@@ -1178,7 +1178,7 @@
 
       {#if mode === "scores"}
         <!-- RIGHT: the picked library score. -->
-        <div class="flex-1 min-w-0 flex flex-col min-h-0 px-6 pb-3">
+        <div class="flex-1 min-w-0 flex flex-col min-h-0 px-6 max-md:px-3 pb-3">
           {#if pickedScore}
             <ScoreViewer
               score={pickedScore}
@@ -1196,7 +1196,7 @@
         </div>
       {:else}
       <!-- RIGHT: takes grid over the composer. -->
-      <div class="flex-1 min-w-0 flex flex-col min-h-0 px-6">
+      <div class="flex-1 min-w-0 flex flex-col min-h-0 px-6 max-md:px-3">
         <div class="flex items-center gap-2.5 h-10 shrink-0">
           <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Takes</span>
           <span class="font-mono text-micro text-txtsecondary tabular-nums">{turns.length}</span>
@@ -1539,7 +1539,7 @@
               {/if}
             </div>
           </div>
-          <div class="flex justify-center gap-4 mt-2 text-micro text-txtsecondary select-none">
+          <div class="hidden sm:flex justify-center gap-4 mt-2 text-micro text-txtsecondary select-none">
             <span><kbd class="font-mono">Enter</kbd> run</span>
             <span><kbd class="font-mono">Shift+Enter</kbd> new line</span>
           </div>
