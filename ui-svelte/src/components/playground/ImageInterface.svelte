@@ -1652,7 +1652,7 @@
       <!-- Canvas: one turn at a time, big. The strip underneath is the thread. -->
       <section class="flex-1 min-w-0 flex flex-col min-h-0">
         {#if turns.length === 0 && !isGenerating}
-          <div class="flex-1 flex flex-col items-center justify-center gap-3 text-txtsecondary">
+          <div class="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center text-txtsecondary">
             <ImageIcon class="w-10 h-10 opacity-40" strokeWidth={1.5} />
             <p>Describe an image to start. Keep prompting to tweak it.</p>
           </div>

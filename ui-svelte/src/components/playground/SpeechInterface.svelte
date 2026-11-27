@@ -829,7 +829,7 @@
           <span class="font-mono text-micro text-txtsecondary tabular-nums">{turns.length}</span>
           <div class="ml-auto flex items-center gap-2">
             <VolumeX class="w-3.5 h-3.5 text-txtsecondary shrink-0" />
-            <input type="range" min="0" max="1" step="0.01" bind:value={$volumeStore} class="w-24 accent-primary" aria-label="Playback volume" />
+            <input type="range" min="0" max="1" step="0.01" bind:value={$volumeStore} class="w-24 max-sm:w-14 accent-primary" aria-label="Playback volume" />
             <Volume2 class="w-3.5 h-3.5 text-txtsecondary shrink-0" />
             <span class="font-mono text-micro text-txtsecondary tabular-nums w-9 text-right">{Math.round($volumeStore * 100)}%</span>
             <label class="shrink-0 flex items-center gap-1.5 pl-3 ml-1 border-l border-card-border-inner text-micro font-medium uppercase tracking-wide text-txtsecondary cursor-pointer" use:tip={"Auto-play new clips"}>

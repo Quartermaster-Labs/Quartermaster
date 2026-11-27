@@ -926,9 +926,13 @@
       : (rewriteOriginal != null ? 'w-full' : 'w-full sm:w-4/5') + ' rounded-bl-sm'}"
   >
     {#if role === "assistant"}
+      <!-- Floats in the gutter right of the bubble, at the pointer's height. Below
+           sm the bubble is full width, so there is no gutter and it would hang off
+           the screen (the chat then scrolled sideways); phones get the same action
+           in the row under the answer instead. -->
       {#if onReply && !isStreaming && !overAsk}
         <button
-          class="absolute left-full ml-2 -translate-y-1/2 z-10 p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary opacity-0 [@media(hover:none)]:opacity-100 group-hover:opacity-100 transition-opacity"
+          class="max-sm:hidden absolute left-full ml-2 -translate-y-1/2 z-10 p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary opacity-0 [@media(hover:none)]:opacity-100 group-hover:opacity-100 transition-opacity"
           style="top: min({replyY}px, calc(100% - 10px))"
           onclick={onReply}
           use:tip={"Reply to this message"}
@@ -965,7 +969,7 @@
                ("Searching for \"…\"") wraps inside the flex item, so its second
                line rendered centered while every other label stayed flush left. -->
           <button
-            class="flex items-center gap-1.5 text-left text-sm text-txtsecondary hover:text-txtmain transition-colors group"
+            class="flex items-center gap-1.5 max-w-full text-left text-sm text-txtsecondary hover:text-txtmain transition-colors group"
             onclick={() => showReasoning = !showReasoning}
           >
             <ChevronRight class="w-3.5 h-3.5 transition-transform {showReasoning ? 'rotate-90' : ''}" />
@@ -1162,6 +1166,15 @@
               use:tip={"Regenerate response"}
             >
               <RefreshCw class="w-4 h-4" />
+            </button>
+          {/if}
+          {#if onReply && !overAsk}
+            <button
+              class="sm:hidden p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
+              onclick={onReply}
+              aria-label="Reply to this message"
+            >
+              <Reply class="w-4 h-4" />
             </button>
           {/if}
           <button

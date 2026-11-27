@@ -475,8 +475,20 @@ the model is still thinking. A cleared title goes back to the tab's derived one 
     its tip stuck on screen.
   - `h-screen` is `100dvh` (with a `100vh` line first as the fallback): a phone browser's `100vh` is
     the height with its address bar hidden, which put the composer below the fold.
-  Verify with `npm run shots -- --playground ... --widths 390 --height 844`; for the tap-opened
-  sheets, drive the same fixture with `isMobile`/`hasTouch` so `hover:none` applies.
+  - Anything that floats OUTSIDE its box (`absolute left-full`, the chat's reply button) has no
+    gutter to sit in once the box is full width, and the whole message list then scrolls sideways.
+    Move such an action into the box below `sm` rather than clipping the scroller.
+  Verify with `npm run shots -- --playground ... --widths 360 --height 595` (the owner's phone is
+  360 CSS px, 595 tall with the browser bars, narrower than the usual 390 test width).
+  **On the real phone** (Android over USB, Chromium browser): `adb forward tcp:9222
+  localabstract:chrome_devtools_remote`, `adb reverse tcp:5179 tcp:5179`, run the Vite dev server on
+  5179, then `chromium.connectOverCDP("http://127.0.0.1:9222")`, open a NEW page and pass that page
+  (it has the same `route` method) to `installPlayground`. Route the page, NEVER the context: the
+  context is the user's whole browser, and a context route would hijack their real, logged-in tab.
+  The `localhost:5179` origin also has no login cookie, so a write that escaped would be refused
+  anyway. `tap()` is refused on a CDP-attached page; `click()` works and still lands as touch.
+  Measure overflow with `scrollWidth > clientWidth` on `overflow-x:auto` elements plus any element
+  whose rect passes the viewport's right edge.
 - **`h-10` is the app's row unit.** A sidebar item, the status rail and every page's first
   toolbar row are all 40px, so the chrome and the page content share one horizontal grid. Give a
   toolbar `min-h-10` (not `h-10`) wherever its contents can wrap, and `items-stretch` on a tab bar

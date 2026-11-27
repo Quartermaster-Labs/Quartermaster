@@ -480,7 +480,7 @@
       <!-- Canvas: one mesh at a time, big. The strip underneath is the thread. -->
       <section class="flex-1 min-w-0 flex flex-col min-h-0">
         {#if turns.length === 0 && !isGenerating}
-          <div class="flex-1 flex flex-col items-center justify-center gap-3 text-txtsecondary">
+          <div class="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center text-txtsecondary">
             <Box class="w-10 h-10 opacity-40" strokeWidth={1.5} />
             <p>Drop or pick an image to turn it into a 3D mesh.</p>
           </div>
